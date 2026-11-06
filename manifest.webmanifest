@@ -1,9 +1,0 @@
-{
-  "name": "SCHOOL LINK",
-  "short_name": "SCHOOL LINK",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#090b0e",
-  "theme_color": "#0b0d10",
-  "description": "学校向け連絡アプリ"
-}
