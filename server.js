@@ -9,17 +9,11 @@ const server = http.createServer(app);
 
 const PORT = process.env.PORT || 3000;
 
-app.use(
-  express.json({
-    limit: "15mb"
-  })
-);
+app.use(express.json({ limit: "20mb" }));
 
-app.use(
-  express.static(
-    path.join(__dirname, "public")
-  )
-);
+app.use(express.static(
+  path.join(__dirname, "public")
+));
 
 const io = new Server(server, {
   cors: {
@@ -28,69 +22,30 @@ const io = new Server(server, {
   }
 });
 
-/* ==================================================
+/* =========================
    データ
-================================================== */
+========================= */
 
 const users = new Map();
 const messages = new Map();
-const friendships = new Map();
-const friendRequests = new Map();
 const userSockets = new Map();
+const friendRequests = new Map();
+const friendships = new Map();
 
-/*
-  friendships:
-  userId -> Map(
-    otherUserId -> {
-      favorite: false,
-      createdAt: number
-    }
-  )
-
-  friendRequests:
-  requestId -> {
-    id,
-    from,
-    to,
-    status,
-    createdAt
-  }
-*/
-
-/* ==================================================
+/* =========================
    共通
-================================================== */
+========================= */
 
 function createId() {
   return crypto.randomUUID();
 }
 
-function getUser(userId) {
-  return users.get(userId) || null;
-}
-
-function isOnline(userId) {
-  const sockets = userSockets.get(userId);
-
-  return !!sockets && sockets.size > 0;
-}
-
-function getUserSockets(userId) {
-  return userSockets.get(userId) || new Set();
-}
-
-function emitToUser(userId, event, data) {
-  const sockets = getUserSockets(userId);
-
-  for (const socketId of sockets) {
-    io.to(socketId).emit(event, data);
-  }
+function getUser(id) {
+  return users.get(id) || null;
 }
 
 function publicUser(user) {
-  if (!user) {
-    return null;
-  }
+  if (!user) return null;
 
   return {
     id: user.id,
@@ -102,17 +57,41 @@ function publicUser(user) {
   };
 }
 
-function conversationKey(userA, userB) {
-  return [userA, userB]
+function isOnline(userId) {
+  const sockets =
+    userSockets.get(userId);
+
+  return !!sockets &&
+    sockets.size > 0;
+}
+
+function emitToUser(
+  userId,
+  event,
+  data
+) {
+  const sockets =
+    userSockets.get(userId);
+
+  if (!sockets) return;
+
+  for (const socketId of sockets) {
+    io.to(socketId).emit(
+      event,
+      data
+    );
+  }
+}
+
+function conversationKey(a, b) {
+  return [a, b]
     .sort()
     .join(":");
 }
 
-function getConversation(userA, userB) {
-  const key = conversationKey(
-    userA,
-    userB
-  );
+function getConversation(a, b) {
+  const key =
+    conversationKey(a, b);
 
   if (!messages.has(key)) {
     messages.set(key, []);
@@ -121,142 +100,98 @@ function getConversation(userA, userB) {
   return messages.get(key);
 }
 
-function getFriendMap(userId) {
-  if (!friendships.has(userId)) {
-    friendships.set(
-      userId,
-      new Map()
-    );
-  }
-
-  return friendships.get(userId);
+function friendshipKey(a, b) {
+  return [a, b]
+    .sort()
+    .join(":");
 }
 
-function areFriends(userA, userB) {
-  return (
-    getFriendMap(userA).has(userB) &&
-    getFriendMap(userB).has(userA)
+function areFriends(a, b) {
+  return friendships.has(
+    friendshipKey(a, b)
   );
 }
 
-function addFriend(userA, userB) {
-  const now = Date.now();
+function getFriendList(userId) {
+  const result = [];
 
-  getFriendMap(userA).set(
-    userB,
-    {
-      favorite: false,
-      createdAt: now
+  for (const key of friendships.keys()) {
+    const ids = key.split(":");
+
+    if (!ids.includes(userId)) {
+      continue;
     }
-  );
 
-  getFriendMap(userB).set(
-    userA,
-    {
-      favorite: false,
-      createdAt: now
-    }
-  );
-}
+    const otherId =
+      ids[0] === userId
+        ? ids[1]
+        : ids[0];
 
-function removeFriend(userA, userB) {
-  getFriendMap(userA).delete(userB);
-  getFriendMap(userB).delete(userA);
-}
+    const user =
+      getUser(otherId);
 
-function getFriendInfo(userA, userB) {
-  return (
-    getFriendMap(userA).get(userB) ||
-    null
-  );
-}
+    if (!user) continue;
 
-function getLastMessage(userA, userB) {
-  const conversation =
-    getConversation(
-      userA,
-      userB
-    );
-
-  if (!conversation.length) {
-    return null;
-  }
-
-  return conversation[
-    conversation.length - 1
-  ];
-}
-
-function getUnreadCount(
-  userId,
-  otherUserId
-) {
-  const conversation =
-    getConversation(
-      userId,
-      otherUserId
-    );
-
-  return conversation.filter(
-    message =>
-      message.to === userId &&
-      message.from === otherUserId &&
-      !message.read &&
-      !message.deleted
-  ).length;
-}
-
-function friendObject(
-  userId,
-  otherUserId
-) {
-  const user =
-    getUser(otherUserId);
-
-  if (!user) {
-    return null;
-  }
-
-  const info =
-    getFriendInfo(
-      userId,
-      otherUserId
-    );
-
-  const lastMessage =
-    getLastMessage(
-      userId,
-      otherUserId
-    );
-
-  return {
-    ...publicUser(user),
-
-    favorite:
-      info?.favorite || false,
-
-    friendSince:
-      info?.createdAt || null,
-
-    lastMessageAt:
-      lastMessage?.createdAt || 0,
-
-    lastMessageText:
-      lastMessage?.deleted
-        ? ""
-        : lastMessage?.text || "",
-
-    unread:
-      getUnreadCount(
+    const conversation =
+      getConversation(
         userId,
-        otherUserId
-      )
-  };
+        otherId
+      );
+
+    const last =
+      conversation[
+        conversation.length - 1
+      ];
+
+    const unread =
+      conversation.filter(
+        message =>
+          message.to === userId &&
+          message.from === otherId &&
+          !message.read
+      ).length;
+
+    result.push({
+      ...publicUser(user),
+      favorite:
+        user.favoriteFor?.includes(
+          userId
+        ) || false,
+      lastMessageAt:
+        last?.createdAt || null,
+      lastMessageText:
+        last?.deleted
+          ? "削除されたメッセージ"
+          : last?.text || null,
+      unread
+    });
+  }
+
+  result.sort(
+    (a, b) => {
+      if (
+        a.favorite &&
+        !b.favorite
+      ) return -1;
+
+      if (
+        !a.favorite &&
+        b.favorite
+      ) return 1;
+
+      return (
+        (b.lastMessageAt || 0) -
+        (a.lastMessageAt || 0)
+      );
+    }
+  );
+
+  return result;
 }
 
-/* ==================================================
+/* =========================
    Health
-================================================== */
+========================= */
 
 app.get(
   "/health",
@@ -268,22 +203,17 @@ app.get(
   }
 );
 
-/* ==================================================
-   ユーザー
-================================================== */
+/* =========================
+   Users
+========================= */
 
 app.get(
   "/api/users",
   (req, res) => {
-    const result = [];
-
-    for (const user of users.values()) {
-      result.push(
-        publicUser(user)
-      );
-    }
-
-    res.json(result);
+    res.json(
+      [...users.values()]
+        .map(publicUser)
+    );
   }
 );
 
@@ -291,12 +221,14 @@ app.post(
   "/api/users",
   (req, res) => {
     const name =
-      typeof req.body?.name === "string"
+      typeof req.body?.name ===
+      "string"
         ? req.body.name.trim()
         : "";
 
     const className =
-      typeof req.body?.className === "string"
+      typeof req.body?.className ===
+      "string"
         ? req.body.className.trim()
         : "";
 
@@ -326,6 +258,7 @@ app.post(
       name,
       className,
       icon: null,
+      favoriteFor: [],
       createdAt: Date.now(),
       lastOnline: null
     };
@@ -334,8 +267,6 @@ app.post(
       user.id,
       user
     );
-
-    getFriendMap(user.id);
 
     res.status(201).json(
       publicUser(user)
@@ -347,7 +278,9 @@ app.get(
   "/api/users/:userId",
   (req, res) => {
     const user =
-      getUser(req.params.userId);
+      getUser(
+        req.params.userId
+      );
 
     if (!user) {
       return res.status(404).json({
@@ -362,18 +295,13 @@ app.get(
   }
 );
 
-/* ==================================================
-   プロフィール更新
-================================================== */
-
 app.patch(
   "/api/users/:userId",
   (req, res) => {
-    const userId =
-      req.params.userId;
-
     const user =
-      getUser(userId);
+      getUser(
+        req.params.userId
+      );
 
     if (!user) {
       return res.status(404).json({
@@ -383,18 +311,20 @@ app.patch(
     }
 
     const name =
-      typeof req.body?.name === "string"
+      typeof req.body?.name ===
+      "string"
         ? req.body.name.trim()
         : user.name;
 
     const className =
-      typeof req.body?.className === "string"
+      typeof req.body?.className ===
+      "string"
         ? req.body.className.trim()
         : user.className;
 
     const icon =
-      typeof req.body?.icon === "string" ||
-      req.body?.icon === null
+      typeof req.body?.icon ===
+      "string"
         ? req.body.icon
         : user.icon;
 
@@ -419,23 +349,9 @@ app.patch(
       });
     }
 
-    /*
-      アイコンはデータURLを想定。
-      あまりに巨大なデータを防止。
-    */
-    if (
-      icon &&
-      icon.length > 12_000_000
-    ) {
-      return res.status(400).json({
-        error:
-          "アイコン画像が大きすぎます。"
-      });
-    }
-
     user.name = name;
     user.className = className;
-    user.icon = icon;
+    user.icon = icon || null;
 
     const updated =
       publicUser(user);
@@ -449,9 +365,9 @@ app.patch(
   }
 );
 
-/* ==================================================
-   友達一覧
-================================================== */
+/* =========================
+   Friends
+========================= */
 
 app.get(
   "/api/friends/:userId",
@@ -459,175 +375,22 @@ app.get(
     const userId =
       req.params.userId;
 
-    if (!getUser(userId)) {
+    if (!users.has(userId)) {
       return res.status(404).json({
         error:
           "ユーザーが見つかりません。"
       });
     }
 
-    const friendMap =
-      getFriendMap(userId);
-
-    const result = [];
-
-    for (const friendId of friendMap.keys()) {
-      const friend =
-        friendObject(
-          userId,
-          friendId
-        );
-
-      if (friend) {
-        result.push(friend);
-      }
-    }
-
-    /*
-      お気に入りを最上段、
-      その中でも最近のやりとり順。
-    */
-    result.sort(
-      (a, b) => {
-        if (
-          a.favorite !==
-          b.favorite
-        ) {
-          return a.favorite
-            ? -1
-            : 1;
-        }
-
-        return (
-          (b.lastMessageAt || 0) -
-          (a.lastMessageAt || 0)
-        );
-      }
+    res.json(
+      getFriendList(userId)
     );
-
-    res.json(result);
   }
 );
 
-/* ==================================================
-   お気に入り
-================================================== */
-
-app.patch(
-  "/api/friends/:userId/:friendId/favorite",
-  (req, res) => {
-    const userId =
-      req.params.userId;
-
-    const friendId =
-      req.params.friendId;
-
-    if (
-      !getUser(userId) ||
-      !getUser(friendId)
-    ) {
-      return res.status(404).json({
-        error:
-          "ユーザーが見つかりません。"
-      });
-    }
-
-    if (
-      !areFriends(
-        userId,
-        friendId
-      )
-    ) {
-      return res.status(400).json({
-        error:
-          "友達ではありません。"
-      });
-    }
-
-    const favorite =
-      Boolean(
-        req.body?.favorite
-      );
-
-    getFriendMap(
-      userId
-    ).get(friendId).favorite =
-      favorite;
-
-    /*
-      相手側のお気に入りは
-      自動では変更しない。
-    */
-
-    const result =
-      friendObject(
-        userId,
-        friendId
-      );
-
-    emitToUser(
-      userId,
-      "favorite-updated",
-      result
-    );
-
-    res.json(result);
-  }
-);
-
-/* ==================================================
-   友達削除
-================================================== */
-
-app.delete(
-  "/api/friends/:userId/:friendId",
-  (req, res) => {
-    const userId =
-      req.params.userId;
-
-    const friendId =
-      req.params.friendId;
-
-    if (
-      !getUser(userId) ||
-      !getUser(friendId)
-    ) {
-      return res.status(404).json({
-        error:
-          "ユーザーが見つかりません。"
-      });
-    }
-
-    removeFriend(
-      userId,
-      friendId
-    );
-
-    emitToUser(
-      friendId,
-      "friend-removed",
-      {
-        userId
-      }
-    );
-
-    emitToUser(
-      userId,
-      "friend-removed",
-      {
-        userId: friendId
-      }
-    );
-
-    res.json({
-      ok: true
-    });
-  }
-);
-
-/* ==================================================
-   友達申請
-================================================== */
+/* =========================
+   Friend requests
+========================= */
 
 app.get(
   "/api/friend-requests/:userId",
@@ -635,25 +398,14 @@ app.get(
     const userId =
       req.params.userId;
 
-    if (!getUser(userId)) {
-      return res.status(404).json({
-        error:
-          "ユーザーが見つかりません。"
-      });
-    }
-
     const incoming = [];
     const outgoing = [];
 
     for (const request of friendRequests.values()) {
       if (
-        request.status !==
-        "pending"
+        request.to === userId &&
+        request.status === "pending"
       ) {
-        continue;
-      }
-
-      if (request.to === userId) {
         incoming.push({
           ...request,
           fromUser:
@@ -665,7 +417,10 @@ app.get(
         });
       }
 
-      if (request.from === userId) {
+      if (
+        request.from === userId &&
+        request.status === "pending"
+      ) {
         outgoing.push({
           ...request,
           toUser:
@@ -678,18 +433,6 @@ app.get(
       }
     }
 
-    incoming.sort(
-      (a, b) =>
-        b.createdAt -
-        a.createdAt
-    );
-
-    outgoing.sort(
-      (a, b) =>
-        b.createdAt -
-        a.createdAt
-    );
-
     res.json({
       incoming,
       outgoing
@@ -701,22 +444,16 @@ app.post(
   "/api/friend-requests",
   (req, res) => {
     const from =
-      typeof req.body?.from === "string"
-        ? req.body.from
-        : "";
+      req.body?.from;
 
     const to =
-      typeof req.body?.to === "string"
-        ? req.body.to
-        : "";
+      req.body?.to;
 
     if (
-      !from ||
-      !to ||
-      !getUser(from) ||
-      !getUser(to)
+      !users.has(from) ||
+      !users.has(to)
     ) {
-      return res.status(400).json({
+      return res.status(404).json({
         error:
           "ユーザーが見つかりません。"
       });
@@ -730,10 +467,7 @@ app.post(
     }
 
     if (
-      areFriends(
-        from,
-        to
-      )
+      areFriends(from, to)
     ) {
       return res.status(400).json({
         error:
@@ -741,24 +475,18 @@ app.post(
       });
     }
 
-    for (const request of friendRequests.values()) {
+    for (
+      const request
+      of friendRequests.values()
+    ) {
       if (
-        request.status ===
-          "pending" &&
-        (
-          (
-            request.from === from &&
-            request.to === to
-          ) ||
-          (
-            request.from === to &&
-            request.to === from
-          )
-        )
+        request.from === from &&
+        request.to === to &&
+        request.status === "pending"
       ) {
         return res.status(400).json({
           error:
-            "すでに申請されています。"
+            "すでに申請しています。"
         });
       }
     }
@@ -776,41 +504,31 @@ app.post(
       request
     );
 
-    const fromUser =
-      publicUser(
-        getUser(from)
-      );
-
     emitToUser(
       to,
       "friend-request",
       {
         ...request,
-        fromUser
+        fromUser:
+          publicUser(
+            getUser(from)
+          )
       }
     );
 
-    res.status(201).json({
-      ...request,
-      fromUser
-    });
+    res.status(201).json(
+      request
+    );
   }
 );
 
-/* ==================================================
-   友達申請 処理
-================================================== */
-
 app.post(
-  "/api/friend-requests/:requestId/:action",
+  "/api/friend-requests/:requestId/accept",
   (req, res) => {
     const request =
       friendRequests.get(
         req.params.requestId
       );
-
-    const action =
-      req.params.action;
 
     if (!request) {
       return res.status(404).json({
@@ -819,72 +537,31 @@ app.post(
       });
     }
 
-    if (
-      request.status !==
-      "pending"
-    ) {
-      return res.status(400).json({
-        error:
-          "この申請はすでに処理されています。"
-      });
-    }
-
-    if (
-      action !== "accept" &&
-      action !== "reject"
-    ) {
-      return res.status(400).json({
-        error:
-          "不正な操作です。"
-      });
-    }
-
-    if (action === "reject") {
-      request.status =
-        "rejected";
-
-      emitToUser(
-        request.from,
-        "friend-request-rejected",
-        {
-          requestId:
-            request.id
-        }
-      );
-
-      return res.json({
-        ok: true,
-        status: "rejected"
-      });
-    }
-
     request.status =
       "accepted";
 
-    addFriend(
-      request.from,
-      request.to
+    friendships.set(
+      friendshipKey(
+        request.from,
+        request.to
+      ),
+      {
+        createdAt: Date.now()
+      }
     );
 
     const fromUser =
-      publicUser(
-        getUser(
-          request.from
-        )
-      );
+      getUser(request.from);
 
     const toUser =
-      publicUser(
-        getUser(
-          request.to
-        )
-      );
+      getUser(request.to);
 
     emitToUser(
       request.from,
       "friend-added",
       {
-        user: toUser
+        user:
+          publicUser(toUser)
       }
     );
 
@@ -892,41 +569,60 @@ app.post(
       request.to,
       "friend-added",
       {
-        user: fromUser
+        user:
+          publicUser(fromUser)
       }
     );
 
     res.json({
-      ok: true,
-      status: "accepted"
+      ok: true
     });
   }
 );
 
-/* ==================================================
-   メッセージ取得
-================================================== */
+app.post(
+  "/api/friend-requests/:requestId/reject",
+  (req, res) => {
+    const request =
+      friendRequests.get(
+        req.params.requestId
+      );
+
+    if (!request) {
+      return res.status(404).json({
+        error:
+          "申請が見つかりません。"
+      });
+    }
+
+    request.status =
+      "rejected";
+
+    res.json({
+      ok: true
+    });
+  }
+);
+
+/* =========================
+   Messages
+========================= */
 
 app.get(
   "/api/messages/:userId/:otherUserId",
   (req, res) => {
-    const userId =
-      req.params.userId;
+    const {
+      userId,
+      otherUserId
+    } = req.params;
 
-    const otherUserId =
-      req.params.otherUserId;
-
-    if (!getUser(userId)) {
+    if (
+      !users.has(userId) ||
+      !users.has(otherUserId)
+    ) {
       return res.status(404).json({
         error:
           "ユーザーが見つかりません。"
-      });
-    }
-
-    if (!getUser(otherUserId)) {
-      return res.status(404).json({
-        error:
-          "相手のユーザーが見つかりません。"
       });
     }
 
@@ -939,36 +635,32 @@ app.get(
   }
 );
 
-/* ==================================================
-   メッセージ削除
-================================================== */
-
 app.delete(
   "/api/messages/:userId/:messageId",
   (req, res) => {
     const userId =
       req.params.userId;
 
-    const messageId =
-      req.params.messageId;
+    let target = null;
 
-    let found = null;
-
-    for (const conversation of messages.values()) {
-      const message =
+    for (
+      const conversation
+      of messages.values()
+    ) {
+      const found =
         conversation.find(
-          item =>
-            item.id ===
-            messageId
+          message =>
+            message.id ===
+            req.params.messageId
         );
 
-      if (message) {
-        found = message;
+      if (found) {
+        target = found;
         break;
       }
     }
 
-    if (!found) {
+    if (!target) {
       return res.status(404).json({
         error:
           "メッセージが見つかりません。"
@@ -976,30 +668,22 @@ app.delete(
     }
 
     if (
-      found.from !== userId
+      target.from !== userId
     ) {
       return res.status(403).json({
         error:
-          "このメッセージは削除できません。"
+          "削除できません。"
       });
     }
 
-    found.deleted = true;
-    found.text = "";
+    target.deleted = true;
+    target.text = "";
 
-    emitToUser(
-      found.from,
+    io.emit(
       "message-deleted",
       {
-        messageId
-      }
-    );
-
-    emitToUser(
-      found.to,
-      "message-deleted",
-      {
-        messageId
+        messageId:
+          target.id
       }
     );
 
@@ -1009,9 +693,9 @@ app.delete(
   }
 );
 
-/* ==================================================
-   Socket.IO
-================================================== */
+/* =========================
+   WebRTC
+========================= */
 
 io.on(
   "connection",
@@ -1021,8 +705,6 @@ io.on(
       "identify",
       userId => {
         if (
-          typeof userId !==
-            "string" ||
           !users.has(userId)
         ) {
           return;
@@ -1031,7 +713,7 @@ io.on(
         if (
           socket.data.userId
         ) {
-          removeSocketFromUser(
+          removeSocket(
             socket,
             socket.data.userId
           );
@@ -1074,9 +756,9 @@ io.on(
       }
     );
 
-    /* ==============================
-       メッセージ送信
-    ============================== */
+    /* -------------------------
+       Message
+    ------------------------- */
 
     socket.on(
       "send-message",
@@ -1084,24 +766,19 @@ io.on(
         const from =
           socket.data.userId;
 
-        if (!from) {
-          return;
-        }
+        if (!from) return;
 
         const to =
-          typeof data?.to === "string"
+          typeof data?.to ===
+          "string"
             ? data.to
             : "";
 
         const text =
-          typeof data?.text === "string"
+          typeof data?.text ===
+          "string"
             ? data.text
             : "";
-
-        const replyTo =
-          typeof data?.replyTo === "string"
-            ? data.replyTo
-            : null;
 
         if (
           !to ||
@@ -1111,69 +788,28 @@ io.on(
         }
 
         if (
-          text.length > 10000
-        ) {
-          return;
-        }
-
-        if (
-          !users.has(from) ||
           !users.has(to)
         ) {
           return;
         }
 
-        if (from === to) {
-          return;
-        }
-
-        /*
-          友達以外とのチャットを
-          防止。
-        */
         if (
-          !areFriends(
-            from,
-            to
-          )
+          !areFriends(from, to)
         ) {
           return;
-        }
-
-        let validReplyTo =
-          null;
-
-        if (replyTo) {
-          const conversation =
-            getConversation(
-              from,
-              to
-            );
-
-          const original =
-            conversation.find(
-              message =>
-                message.id ===
-                replyTo
-            );
-
-          if (original) {
-            validReplyTo =
-              replyTo;
-          }
         }
 
         const message = {
           id: createId(),
           from,
           to,
-          text,
+          text: text.trim(),
           replyTo:
-            validReplyTo,
+            data?.replyTo ||
+            null,
           createdAt:
             Date.now(),
-          read: false,
-          deleted: false
+          read: false
         };
 
         const conversation =
@@ -1198,62 +834,23 @@ io.on(
           message
         );
 
-        /*
-          相手への通知
-        */
-        const sender =
-          getUser(from);
-
         emitToUser(
           to,
           "new-message-notification",
           {
             from:
               publicUser(
-                sender
+                getUser(from)
               ),
             message
           }
         );
-
-        /*
-          返信通知
-        */
-        if (
-          validReplyTo
-        ) {
-          const original =
-            conversation.find(
-              item =>
-                item.id ===
-                validReplyTo
-            );
-
-          if (
-            original &&
-            original.from !== from
-          ) {
-            emitToUser(
-              original.from,
-              "reply-notification",
-              {
-                from:
-                  sender?.name ||
-                  "ユーザー",
-                messageId:
-                  message.id,
-                replyTo:
-                  validReplyTo
-              }
-            );
-          }
-        }
       }
     );
 
-    /* ==============================
-       既読
-    ============================== */
+    /* -------------------------
+       Read
+    ------------------------- */
 
     socket.on(
       "mark-read",
@@ -1261,17 +858,13 @@ io.on(
         const userId =
           socket.data.userId;
 
-        if (!userId) {
-          return;
-        }
-
         const otherUserId =
-          typeof data?.otherUserId ===
-          "string"
-            ? data.otherUserId
-            : "";
+          data?.otherUserId;
 
-        if (!otherUserId) {
+        if (
+          !userId ||
+          !otherUserId
+        ) {
           return;
         }
 
@@ -1284,7 +877,8 @@ io.on(
         let changed = false;
 
         for (
-          const message of conversation
+          const message
+          of conversation
         ) {
           if (
             message.to ===
@@ -1293,39 +887,224 @@ io.on(
               otherUserId &&
             !message.read
           ) {
-            message.read =
-              true;
-
+            message.read = true;
             changed = true;
           }
         }
 
-        if (!changed) {
+        if (changed) {
+          emitToUser(
+            otherUserId,
+            "messages-read",
+            {
+              otherUserId:
+                userId
+            }
+          );
+
+          emitToUser(
+            userId,
+            "messages-read",
+            {
+              otherUserId
+            }
+          );
+        }
+      }
+    );
+
+    /* =====================
+       WebRTC signaling
+    ===================== */
+
+    socket.on(
+      "call-user",
+      data => {
+        const from =
+          socket.data.userId;
+
+        const to =
+          data?.to;
+
+        if (
+          !from ||
+          !to ||
+          !users.has(to)
+        ) {
+          return;
+        }
+
+        if (
+          !areFriends(
+            from,
+            to
+          )
+        ) {
           return;
         }
 
         emitToUser(
-          otherUserId,
-          "messages-read",
+          to,
+          "incoming-call",
           {
-            otherUserId:
-              userId
-          }
-        );
-
-        emitToUser(
-          userId,
-          "messages-read",
-          {
-            otherUserId
+            from,
+            fromUser:
+              publicUser(
+                getUser(from)
+              ),
+            callType:
+              data.callType ===
+              "video"
+                ? "video"
+                : "audio"
           }
         );
       }
     );
 
-    /* ==============================
-       切断
-    ============================== */
+    socket.on(
+      "call-accepted",
+      data => {
+        const from =
+          socket.data.userId;
+
+        const to =
+          data?.to;
+
+        emitToUser(
+          to,
+          "call-accepted",
+          {
+            from
+          }
+        );
+      }
+    );
+
+    socket.on(
+      "call-rejected",
+      data => {
+        const from =
+          socket.data.userId;
+
+        const to =
+          data?.to;
+
+        emitToUser(
+          to,
+          "call-rejected",
+          {
+            from
+          }
+        );
+      }
+    );
+
+    socket.on(
+      "call-ended",
+      data => {
+        const from =
+          socket.data.userId;
+
+        const to =
+          data?.to;
+
+        emitToUser(
+          to,
+          "call-ended",
+          {
+            from
+          }
+        );
+      }
+    );
+
+    socket.on(
+      "webrtc-offer",
+      data => {
+        const from =
+          socket.data.userId;
+
+        const to =
+          data?.to;
+
+        if (
+          !from ||
+          !to ||
+          !data?.offer
+        ) {
+          return;
+        }
+
+        emitToUser(
+          to,
+          "webrtc-offer",
+          {
+            from,
+            offer:
+              data.offer
+          }
+        );
+      }
+    );
+
+    socket.on(
+      "webrtc-answer",
+      data => {
+        const from =
+          socket.data.userId;
+
+        const to =
+          data?.to;
+
+        if (
+          !from ||
+          !to ||
+          !data?.answer
+        ) {
+          return;
+        }
+
+        emitToUser(
+          to,
+          "webrtc-answer",
+          {
+            from,
+            answer:
+              data.answer
+          }
+        );
+      }
+    );
+
+    socket.on(
+      "webrtc-ice",
+      data => {
+        const from =
+          socket.data.userId;
+
+        const to =
+          data?.to;
+
+        if (
+          !from ||
+          !to ||
+          !data?.candidate
+        ) {
+          return;
+        }
+
+        emitToUser(
+          to,
+          "webrtc-ice",
+          {
+            from,
+            candidate:
+              data.candidate
+          }
+        );
+      }
+    );
 
     socket.on(
       "disconnect",
@@ -1333,31 +1112,27 @@ io.on(
         const userId =
           socket.data.userId;
 
-        if (!userId) {
-          return;
+        if (userId) {
+          removeSocket(
+            socket,
+            userId
+          );
         }
-
-        removeSocketFromUser(
-          socket,
-          userId
-        );
       }
     );
   }
 );
 
-/* ==================================================
-   オンライン状態
-================================================== */
+/* =========================
+   Socket cleanup
+========================= */
 
-function removeSocketFromUser(
+function removeSocket(
   socket,
   userId
 ) {
   const sockets =
-    userSockets.get(
-      userId
-    );
+    userSockets.get(userId);
 
   if (!sockets) {
     return;
@@ -1367,7 +1142,9 @@ function removeSocketFromUser(
     socket.id
   );
 
-  if (sockets.size > 0) {
+  if (
+    sockets.size > 0
+  ) {
     return;
   }
 
@@ -1396,9 +1173,9 @@ function removeSocketFromUser(
   );
 }
 
-/* ==================================================
+/* =========================
    SPA
-================================================== */
+========================= */
 
 app.get(
   "/{*splat}",
@@ -1413,16 +1190,12 @@ app.get(
   }
 );
 
-/* ==================================================
-   起動
-================================================== */
-
 server.listen(
   PORT,
   "0.0.0.0",
   () => {
     console.log(
-      `morimori server running on port ${PORT}`
+      `morimori running on ${PORT}`
     );
   }
 );
