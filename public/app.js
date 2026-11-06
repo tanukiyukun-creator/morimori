@@ -5,10 +5,16 @@ const state = {
   users: [],
   activeUserId: null,
   messages: [],
-  replyTo: null
+  replyTo: null,
+  notificationReady: false
 };
 
 const app = document.getElementById("app");
+
+
+/* =========================
+   共通
+========================= */
 
 function esc(value) {
   return String(value ?? "")
@@ -19,9 +25,14 @@ function esc(value) {
     .replaceAll("'", "&#039;");
 }
 
+
 function initials(name) {
-  return (String(name || "?").trim()[0] || "?").toUpperCase();
+  return (
+    String(name || "?")
+      .trim()[0] || "?"
+  ).toUpperCase();
 }
+
 
 function formatTime(timestamp) {
   return new Intl.DateTimeFormat("ja-JP", {
@@ -30,47 +41,226 @@ function formatTime(timestamp) {
   }).format(timestamp);
 }
 
-async function loadUsers() {
-  const response = await fetch("/api/users");
 
-  if (!response.ok) {
-    throw new Error("ユーザー情報を取得できませんでした。");
+/* =========================
+   通知
+========================= */
+
+async function requestNotificationPermission() {
+
+  if (!("Notification" in window)) {
+    return false;
   }
 
-  state.users = await response.json();
-  render();
+  if (Notification.permission === "granted") {
+    state.notificationReady = true;
+    return true;
+  }
+
+  if (Notification.permission === "denied") {
+    return false;
+  }
+
+  try {
+
+    const permission =
+      await Notification.requestPermission();
+
+    state.notificationReady =
+      permission === "granted";
+
+    return state.notificationReady;
+
+  } catch {
+
+    return false;
+
+  }
 }
 
-async function loadMessages(otherUserId) {
-  const response = await fetch(
-    `/api/messages/${encodeURIComponent(state.me.id)}/${encodeURIComponent(otherUserId)}`
-  );
 
-  if (!response.ok) {
-    state.messages = [];
-    render();
+function showBrowserNotification(
+  title,
+  body
+) {
+
+  if (!("Notification" in window)) {
     return;
   }
 
-  state.messages = await response.json();
+  if (
+    Notification.permission !==
+    "granted"
+  ) {
+    return;
+  }
 
-  socket.emit("mark-read", {
-    otherUserId
-  });
+  /*
+   * ページが表示中でも通知を出す。
+   * 後で設定から変更できるようにする。
+   */
 
-  render();
+  try {
+
+    const notification =
+      new Notification(
+        title,
+        {
+          body,
+          icon: "/icon-192.png",
+          badge: "/icon-192.png",
+          tag: "morimori-message",
+          renotify: true
+        }
+      );
+
+
+    notification.onclick = () => {
+
+      window.focus();
+
+      notification.close();
+
+    };
+
+
+  } catch {
+
+    /*
+     * 一部ブラウザでは
+     * Notificationコンストラクタが
+     * 制限されるため無視。
+     */
+
+  }
+
 }
 
+
+function showNotice(text) {
+
+  const old =
+    document.querySelector(
+      ".notice"
+    );
+
+  old?.remove();
+
+
+  const element =
+    document.createElement(
+      "div"
+    );
+
+  element.className =
+    "notice";
+
+  element.textContent =
+    text;
+
+
+  document.body.appendChild(
+    element
+  );
+
+
+  setTimeout(
+    () => element.remove(),
+    3500
+  );
+
+}
+
+
+/* =========================
+   ユーザー
+========================= */
+
+async function loadUsers() {
+
+  const response =
+    await fetch("/api/users");
+
+
+  if (!response.ok) {
+    throw new Error(
+      "ユーザー情報を取得できませんでした。"
+    );
+  }
+
+
+  state.users =
+    await response.json();
+
+
+  render();
+
+}
+
+
+async function loadMessages(
+  otherUserId
+) {
+
+  const response =
+    await fetch(
+      `/api/messages/${encodeURIComponent(
+        state.me.id
+      )}/${encodeURIComponent(
+        otherUserId
+      )}`
+    );
+
+
+  if (!response.ok) {
+
+    state.messages = [];
+
+    render();
+
+    return;
+  }
+
+
+  state.messages =
+    await response.json();
+
+
+  socket.emit(
+    "mark-read",
+    {
+      otherUserId
+    }
+  );
+
+
+  render();
+
+}
+
+
+/* =========================
+   描画
+========================= */
+
 function render() {
+
   if (!state.me) {
     renderSetup();
     return;
   }
 
   renderApp();
+
 }
 
+
+/* =========================
+   初期登録画面
+========================= */
+
 function renderSetup() {
+
   app.innerHTML = `
     <main class="screen">
       <section class="card">
@@ -86,7 +276,9 @@ function renderSetup() {
         <form id="setup-form">
 
           <div class="field">
-            <label for="name">名前</label>
+            <label for="name">
+              名前
+            </label>
 
             <input
               id="name"
@@ -98,7 +290,9 @@ function renderSetup() {
           </div>
 
           <div class="field">
-            <label for="className">クラス</label>
+            <label for="className">
+              クラス
+            </label>
 
             <input
               id="className"
@@ -108,9 +302,15 @@ function renderSetup() {
             >
           </div>
 
-          <div id="setup-error" class="error"></div>
+          <div
+            id="setup-error"
+            class="error"
+          ></div>
 
-          <button class="primary" type="submit">
+          <button
+            class="primary"
+            type="submit"
+          >
             morimoriを始める
           </button>
 
@@ -120,82 +320,146 @@ function renderSetup() {
     </main>
   `;
 
+
   document
     .getElementById("setup-form")
-    .addEventListener("submit", async (event) => {
+    .addEventListener(
+      "submit",
+      async event => {
 
-      event.preventDefault();
+        event.preventDefault();
 
-      const error = document.getElementById("setup-error");
 
-      error.textContent = "";
-
-      const name = document
-        .getElementById("name")
-        .value
-        .trim();
-
-      const className = document
-        .getElementById("className")
-        .value
-        .trim();
-
-      if (!name || !className) {
-        error.textContent = "名前とクラスを入力してください。";
-        return;
-      }
-
-      try {
-        const response = await fetch("/api/users", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            name,
-            className
-          })
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            data.error || "登録に失敗しました。"
+        const error =
+          document.getElementById(
+            "setup-error"
           );
+
+
+        error.textContent = "";
+
+
+        const name =
+          document
+            .getElementById("name")
+            .value
+            .trim();
+
+
+        const className =
+          document
+            .getElementById("className")
+            .value
+            .trim();
+
+
+        if (!name || !className) {
+
+          error.textContent =
+            "名前とクラスを入力してください。";
+
+          return;
         }
 
-        state.me = data;
 
-        localStorage.setItem(
-          "morimori-me",
-          JSON.stringify(data)
-        );
+        try {
 
-        socket.emit("identify", state.me.id);
+          const response =
+            await fetch(
+              "/api/users",
+              {
+                method: "POST",
 
-        await loadUsers();
+                headers: {
+                  "Content-Type":
+                    "application/json"
+                },
 
-      } catch (errorObject) {
+                body:
+                  JSON.stringify({
+                    name,
+                    className
+                  })
+              }
+            );
 
-        error.textContent =
-          errorObject.message ||
-          "登録に失敗しました。";
+
+          const data =
+            await response.json();
+
+
+          if (!response.ok) {
+
+            throw new Error(
+              data.error ||
+              "登録に失敗しました。"
+            );
+
+          }
+
+
+          state.me = data;
+
+
+          localStorage.setItem(
+            "morimori-me",
+            JSON.stringify(data)
+          );
+
+
+          socket.emit(
+            "identify",
+            state.me.id
+          );
+
+
+          /*
+           * 通知許可を要求
+           */
+
+          await requestNotificationPermission();
+
+
+          await loadUsers();
+
+
+        } catch (errorObject) {
+
+          error.textContent =
+            errorObject.message ||
+            "登録に失敗しました。";
+
+        }
+
       }
-    });
+    );
+
 }
+
+
+/* =========================
+   アプリ
+========================= */
 
 function renderApp() {
 
-  const others = state.users.filter(
-    user => user.id !== state.me.id
-  );
+  const others =
+    state.users.filter(
+      user =>
+        user.id !== state.me.id
+    );
 
-  const active = state.users.find(
-    user => user.id === state.activeUserId
-  );
+
+  const active =
+    state.users.find(
+      user =>
+        user.id ===
+        state.activeUserId
+    );
+
 
   app.innerHTML = `
+
     <div class="app-shell">
 
       <aside class="sidebar">
@@ -209,28 +473,43 @@ function renderApp() {
           <div class="me">
 
             <div class="avatar">
-              ${esc(initials(state.me.name))}
+              ${esc(
+                initials(
+                  state.me.name
+                )
+              )}
             </div>
 
             <div>
+
               <div class="me-name">
-                ${esc(state.me.name)}
+                ${esc(
+                  state.me.name
+                )}
               </div>
 
               <div class="me-class">
-                ${esc(state.me.className)}
+                ${esc(
+                  state.me.className
+                )}
               </div>
+
             </div>
 
           </div>
 
         </div>
 
+
         <div class="user-list">
 
           ${
             others.length
-              ? others.map(userTemplate).join("")
+
+              ? others
+                  .map(userTemplate)
+                  .join("")
+
               : `
                 <div class="empty">
                   ほかのユーザーがまだいません。
@@ -249,15 +528,23 @@ function renderApp() {
 
           ${
             active
+
               ? `
+
                 <div class="avatar">
-                  ${esc(initials(active.name))}
+                  ${esc(
+                    initials(
+                      active.name
+                    )
+                  )}
                 </div>
 
                 <div class="chat-title">
 
                   <strong>
-                    ${esc(active.name)}
+                    ${esc(
+                      active.name
+                    )}
                   </strong>
 
                   <span class="${
@@ -275,8 +562,11 @@ function renderApp() {
                   </span>
 
                 </div>
+
               `
+
               : `
+
                 <div class="chat-title">
 
                   <strong>
@@ -288,6 +578,7 @@ function renderApp() {
                   </span>
 
                 </div>
+
               `
           }
 
@@ -301,21 +592,30 @@ function renderApp() {
 
           ${
             active
+
               ? (
+
                   state.messages.length
+
                     ? state.messages
-                        .map(messageTemplate)
+                        .map(
+                          messageTemplate
+                        )
                         .join("")
+
                     : `
                       <div class="empty">
                         まだメッセージはありません。
                       </div>
                     `
                 )
+
               : `
+
                 <div class="empty">
                   ユーザーを選ぶとチャットを開始できます。
                 </div>
+
               `
           }
 
@@ -324,12 +624,18 @@ function renderApp() {
 
         ${
           state.replyTo
+
             ? `
+
               <div class="reply-bar">
 
                 <div class="reply-text">
+
                   返信:
-                  ${esc(state.replyTo.text)}
+                  ${esc(
+                    state.replyTo.text
+                  )}
+
                 </div>
 
                 <button
@@ -341,7 +647,9 @@ function renderApp() {
                 </button>
 
               </div>
+
             `
+
             : ""
         }
 
@@ -362,6 +670,7 @@ function renderApp() {
             ${active ? "" : "disabled"}
           ></textarea>
 
+
           <button
             class="send"
             type="submit"
@@ -375,8 +684,13 @@ function renderApp() {
       </main>
 
     </div>
+
   `;
 
+
+  /*
+   * ユーザー選択
+   */
 
   document
     .querySelectorAll(".user")
@@ -401,10 +715,15 @@ function renderApp() {
     });
 
 
+  /*
+   * 入力
+   */
+
   const input =
     document.getElementById(
       "message-input"
     );
+
 
   const composer =
     document.getElementById(
@@ -419,8 +738,8 @@ function renderApp() {
       event => {
 
         /*
-         * 日本語IMEの変換確定時Enterと
-         * メッセージ送信Enterを区別する。
+         * 日本語IME変換中のEnterは
+         * 送信しない。
          */
 
         if (
@@ -441,11 +760,16 @@ function renderApp() {
   }
 
 
+  /*
+   * 送信
+   */
+
   composer.addEventListener(
     "submit",
     event => {
 
       event.preventDefault();
+
 
       if (
         !state.activeUserId ||
@@ -454,28 +778,38 @@ function renderApp() {
         return;
       }
 
+
       const text =
         input.value.trim();
+
 
       if (!text) {
         return;
       }
 
+
       socket.emit(
         "send-message",
         {
-          to: state.activeUserId,
+          to:
+            state.activeUserId,
+
           text,
+
           replyTo:
-            state.replyTo?.id || null
+            state.replyTo?.id ||
+            null
         }
       );
+
 
       input.value = "";
 
       state.replyTo = null;
 
+
       render();
+
 
       document
         .getElementById(
@@ -487,8 +821,14 @@ function renderApp() {
   );
 
 
+  /*
+   * 返信
+   */
+
   document
-    .querySelectorAll("[data-reply]")
+    .querySelectorAll(
+      "[data-reply]"
+    )
     .forEach(button => {
 
       button.addEventListener(
@@ -502,13 +842,18 @@ function renderApp() {
                 button.dataset.reply
             );
 
+
           if (!message) {
             return;
           }
 
-          state.replyTo = message;
+
+          state.replyTo =
+            message;
+
 
           render();
+
 
           document
             .getElementById(
@@ -522,8 +867,14 @@ function renderApp() {
     });
 
 
+  /*
+   * 返信キャンセル
+   */
+
   document
-    .getElementById("cancel-reply")
+    .getElementById(
+      "cancel-reply"
+    )
     ?.addEventListener(
       "click",
       () => {
@@ -536,10 +887,15 @@ function renderApp() {
     );
 
 
+  /*
+   * 最下部へ
+   */
+
   const messagesElement =
     document.getElementById(
       "messages"
     );
+
 
   if (messagesElement) {
 
@@ -550,12 +906,19 @@ function renderApp() {
 
 }
 
+
+/* =========================
+   ユーザー表示
+========================= */
+
 function userTemplate(user) {
 
   return `
+
     <button
       class="user ${
-        user.id === state.activeUserId
+        user.id ===
+        state.activeUserId
           ? "active"
           : ""
       }"
@@ -564,8 +927,11 @@ function userTemplate(user) {
     >
 
       <div class="avatar">
-        ${esc(initials(user.name))}
+        ${esc(
+          initials(user.name)
+        )}
       </div>
+
 
       <div class="user-meta">
 
@@ -574,10 +940,13 @@ function userTemplate(user) {
         </div>
 
         <div class="user-class">
-          ${esc(user.className)}
+          ${esc(
+            user.className
+          )}
         </div>
 
       </div>
+
 
       <div class="${
         user.online
@@ -594,24 +963,39 @@ function userTemplate(user) {
       </div>
 
     </button>
+
   `;
+
 }
 
-function messageTemplate(message) {
+
+/* =========================
+   メッセージ表示
+========================= */
+
+function messageTemplate(
+  message
+) {
 
   const mine =
-    message.from === state.me.id;
+    message.from ===
+    state.me.id;
+
 
   const reply =
     message.replyTo
+
       ? state.messages.find(
           item =>
             item.id ===
             message.replyTo
         )
+
       : null;
 
+
   return `
+
     <div class="bubble-row ${
       mine ? "mine" : ""
     }">
@@ -620,27 +1004,42 @@ function messageTemplate(message) {
 
         ${
           reply
+
             ? `
+
               <div class="reply-ref">
-                ${esc(reply.text)}
+                ${esc(
+                  reply.text
+                )}
               </div>
+
             `
+
             : ""
         }
 
+
         <div class="text">
-          ${esc(message.text)}
+          ${esc(
+            message.text
+          )}
         </div>
+
 
         <div class="meta">
 
           <span>
-            ${formatTime(message.createdAt)}
+            ${formatTime(
+              message.createdAt
+            )}
           </span>
+
 
           ${
             mine
+
               ? `
+
                 <span>
                   ${
                     message.read
@@ -648,13 +1047,18 @@ function messageTemplate(message) {
                       : "送信済み"
                   }
                 </span>
+
               `
+
               : ""
           }
 
+
           <button
             class="icon-btn"
-            data-reply="${esc(message.id)}"
+            data-reply="${esc(
+              message.id
+            )}"
             type="button"
             style="
               padding:2px 6px;
@@ -669,32 +1073,36 @@ function messageTemplate(message) {
       </div>
 
     </div>
+
   `;
+
 }
 
 
-/*
- * Socket.IO接続
- */
+/* =========================
+   Socket接続
+========================= */
 
 socket.on(
   "connect",
   () => {
 
     if (state.me) {
+
       socket.emit(
         "identify",
         state.me.id
       );
+
     }
 
   }
 );
 
 
-/*
- * 新しいメッセージ
- */
+/* =========================
+   メッセージ受信
+========================= */
 
 socket.on(
   "message",
@@ -704,28 +1112,39 @@ socket.on(
       return;
     }
 
+
     const belongsToActive =
       state.activeUserId &&
+
       (
+
         (
           message.from ===
             state.me.id &&
+
           message.to ===
             state.activeUserId
-        ) ||
+        )
+
+        ||
+
         (
           message.to ===
             state.me.id &&
+
           message.from ===
             state.activeUserId
         )
+
       );
+
 
     if (belongsToActive) {
 
       state.messages.push(
         message
       );
+
 
       if (
         message.to ===
@@ -744,16 +1163,19 @@ socket.on(
 
     }
 
+
     render();
 
 
     /*
-     * 現在開いていない相手から
-     * メッセージが届いた場合
+     * 自分が開いていない
+     * 相手からのメッセージ
      */
 
     if (
-      message.to === state.me.id &&
+      message.to ===
+        state.me.id &&
+
       message.from !==
         state.activeUserId
     ) {
@@ -765,11 +1187,20 @@ socket.on(
             message.from
         );
 
+
+      const senderName =
+        sender?.name ||
+        "新しいメッセージ";
+
+
       showNotice(
-        `${
-          sender?.name ||
-          "新しいメッセージ"
-        }: ${message.text}`
+        `${senderName}: ${message.text}`
+      );
+
+
+      showBrowserNotification(
+        senderName,
+        message.text
       );
 
     }
@@ -778,9 +1209,9 @@ socket.on(
 );
 
 
-/*
- * 返信通知
- */
+/* =========================
+   返信通知
+========================= */
 
 socket.on(
   "reply-notification",
@@ -790,13 +1221,19 @@ socket.on(
       `${data.from}から返信`
     );
 
+
+    showBrowserNotification(
+      `${data.from}から返信`,
+      "あなたのメッセージに返信がありました。"
+    );
+
   }
 );
 
 
-/*
- * オンライン状態
- */
+/* =========================
+   オンライン状態
+========================= */
 
 socket.on(
   "presence",
@@ -809,15 +1246,19 @@ socket.on(
           data.userId
       );
 
+
     if (!user) {
       return;
     }
 
+
     user.online =
       data.online;
 
+
     user.lastOnline =
       data.lastOnline;
+
 
     render();
 
@@ -825,9 +1266,9 @@ socket.on(
 );
 
 
-/*
- * 既読状態
- */
+/* =========================
+   既読
+========================= */
 
 socket.on(
   "messages-read",
@@ -839,6 +1280,7 @@ socket.on(
     ) {
       return;
     }
+
 
     state.messages =
       state.messages.map(
@@ -856,10 +1298,12 @@ socket.on(
 
           }
 
+
           return message;
 
         }
       );
+
 
     render();
 
@@ -867,45 +1311,9 @@ socket.on(
 );
 
 
-/*
- * 通知表示
- */
-
-function showNotice(text) {
-
-  const old =
-    document.querySelector(
-      ".notice"
-    );
-
-  old?.remove();
-
-  const element =
-    document.createElement(
-      "div"
-    );
-
-  element.className =
-    "notice";
-
-  element.textContent =
-    text;
-
-  document.body.appendChild(
-    element
-  );
-
-  setTimeout(
-    () => element.remove(),
-    3500
-  );
-
-}
-
-
-/*
- * 起動
- */
+/* =========================
+   起動
+========================= */
 
 (async function init() {
 
@@ -916,15 +1324,18 @@ function showNotice(text) {
       state.me.id
     );
 
+
     try {
 
       await loadUsers();
+
 
     } catch {
 
       render();
 
     }
+
 
   } else {
 
