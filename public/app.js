@@ -1,29 +1,34 @@
 const socket = io();
 
-const meKey = "morimori-me";
-
-let me = null;
-let users = [];
-let friends = [];
-let currentChatUser = null;
-let messages = [];
-let replyTarget = null;
-let currentScreen = "friends";
-let friendRequestCount = 0;
-
 const app = document.getElementById("app");
 
-/* =========================
+const STORAGE_KEY = "morimori-me";
+
+let me = null;
+let friends = [];
+let allUsers = [];
+let incomingRequests = [];
+let outgoingRequests = [];
+
+let currentChatUser = null;
+let currentMessages = [];
+let replyTarget = null;
+
+let currentPage = "friends";
+
+let searchTimer = null;
+
+/* ==================================================
    共通
-========================= */
+================================================== */
 
 function escapeHtml(value) {
   return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 function formatTime(timestamp) {
@@ -38,155 +43,206 @@ function formatTime(timestamp) {
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate()
   ) {
-    return date.toLocaleTimeString("ja-JP", {
-      hour: "2-digit",
-      minute: "2-digit"
-    });
+    return date.toLocaleTimeString(
+      "ja-JP",
+      {
+        hour: "2-digit",
+        minute: "2-digit"
+      }
+    );
   }
 
-  return date.toLocaleDateString("ja-JP", {
-    month: "numeric",
-    day: "numeric"
-  });
+  return date.toLocaleDateString(
+    "ja-JP",
+    {
+      month: "numeric",
+      day: "numeric"
+    }
+  );
 }
 
-function getInitial(name) {
-  const text = String(name || "?").trim();
-
-  if (!text) return "?";
-
-  return text[0];
-}
-
-function avatarHtml(user, size = "") {
-  const cls = size ? `avatar ${size}` : "avatar";
+function avatarHtml(user, large = false) {
+  const sizeClass = large
+    ? " large"
+    : "";
 
   if (user?.icon) {
     return `
-      <div class="${cls}">
-        <img src="${escapeHtml(user.icon)}" alt="">
+      <div class="avatar${sizeClass}">
+        <img src="${user.icon}" alt="">
       </div>
     `;
   }
 
+  const first =
+    user?.name?.trim()?.charAt(0) ||
+    "?";
+
   return `
-    <div class="${cls}">
-      ${escapeHtml(getInitial(user?.name))}
+    <div class="avatar${sizeClass}">
+      ${escapeHtml(first)}
     </div>
   `;
 }
 
-function showToast(text) {
-  let toast = document.getElementById("morimori-toast");
+function showToast(message) {
+  let toast =
+    document.querySelector(".toast");
 
   if (!toast) {
-    toast = document.createElement("div");
-    toast.id = "morimori-toast";
+    toast =
+      document.createElement("div");
+
     toast.className = "toast";
-    document.body.appendChild(toast);
+
+    document.body.appendChild(
+      toast
+    );
   }
 
-  toast.textContent = text;
+  toast.textContent = message;
+
   toast.classList.add("show");
 
-  clearTimeout(toast._timer);
+  clearTimeout(
+    toast._timer
+  );
 
-  toast._timer = setTimeout(() => {
-    toast.classList.remove("show");
-  }, 2200);
+  toast._timer =
+    setTimeout(() => {
+      toast.classList.remove(
+        "show"
+      );
+    }, 2400);
 }
 
-async function api(url, options = {}) {
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {})
-    },
-    ...options
-  });
+async function api(
+  url,
+  options = {}
+) {
+  const response =
+    await fetch(url, {
+      headers: {
+        "Content-Type":
+          "application/json",
+        ...(options.headers || {})
+      },
+      ...options
+    });
 
   let data = null;
 
   try {
-    data = await response.json();
+    data =
+      await response.json();
   } catch {
     data = null;
   }
 
   if (!response.ok) {
     throw new Error(
-      data?.error || "通信に失敗しました。"
+      data?.error ||
+      "通信に失敗しました。"
     );
   }
 
   return data;
 }
 
-/* =========================
-   初期化
-========================= */
+/* ==================================================
+   起動
+================================================== */
 
 async function init() {
-  const saved = localStorage.getItem(meKey);
+  const saved =
+    localStorage.getItem(
+      STORAGE_KEY
+    );
 
   if (!saved) {
-    showSetup();
+    renderSetup();
     return;
   }
 
   try {
     me = JSON.parse(saved);
   } catch {
-    localStorage.removeItem(meKey);
-    showSetup();
-    return;
-  }
+    localStorage.removeItem(
+      STORAGE_KEY
+    );
 
-  if (!me?.id) {
-    localStorage.removeItem(meKey);
-    showSetup();
+    renderSetup();
     return;
   }
 
   try {
-    me = await api(`/api/users/${me.id}`);
-    localStorage.setItem(meKey, JSON.stringify(me));
+    const fresh =
+      await api(
+        `/api/users/${me.id}`
+      );
+
+    me = fresh;
+
+    saveMe();
+
+    socket.emit(
+      "identify",
+      me.id
+    );
+
+    await loadFriends();
+    await loadRequests();
+
+    renderFriendsPage();
+
+    requestNotificationPermission();
   } catch {
-    localStorage.removeItem(meKey);
-    showSetup();
-    return;
+    localStorage.removeItem(
+      STORAGE_KEY
+    );
+
+    renderSetup();
   }
-
-  connectSocket();
-  await loadFriends();
-  await loadFriendRequests();
-
-  showMain();
 }
 
-/* =========================
-   初回登録
-========================= */
+function saveMe() {
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify(me)
+  );
+}
 
-function showSetup() {
+/* ==================================================
+   初回登録
+================================================== */
+
+function renderSetup() {
   app.innerHTML = `
     <div class="setup-screen">
       <div class="setup-card">
-        <div class="logo">morimori</div>
+
+        <div class="logo">
+          morimori
+        </div>
 
         <div class="setup-subtitle">
           学校でつながるリアルタイム連絡アプリ
         </div>
 
-        <div class="setup-form">
+        <form
+          class="setup-form"
+          id="setup-form"
+        >
+
           <label>
-            名前
+            表示名
             <input
               id="setup-name"
               type="text"
               maxlength="40"
-              placeholder="表示する名前"
+              placeholder="例：谷利優樹"
               autocomplete="name"
+              required
             >
           </label>
 
@@ -196,569 +252,500 @@ function showSetup() {
               id="setup-class"
               type="text"
               maxlength="30"
-              placeholder="例：1年3組"
+              placeholder="例：EL1-2"
+              required
             >
           </label>
 
           <button
-            id="setup-button"
             class="primary-button"
+            type="submit"
           >
-            はじめる
+            morimoriを始める
           </button>
-        </div>
+
+        </form>
+
       </div>
     </div>
   `;
 
   document
-    .getElementById("setup-button")
-    .addEventListener("click", createAccount);
-
-  document
-    .getElementById("setup-name")
-    .addEventListener("keydown", e => {
-      if (e.key === "Enter") {
-        createAccount();
-      }
-    });
-
-  document
-    .getElementById("setup-class")
-    .addEventListener("keydown", e => {
-      if (e.key === "Enter") {
-        createAccount();
-      }
-    });
+    .getElementById("setup-form")
+    .addEventListener(
+      "submit",
+      createAccount
+    );
 }
 
-async function createAccount() {
+async function createAccount(event) {
+  event.preventDefault();
+
   const name =
-    document.getElementById("setup-name")
-      ?.value
-      .trim();
+    document
+      .getElementById(
+        "setup-name"
+      )
+      .value.trim();
 
   const className =
-    document.getElementById("setup-class")
-      ?.value
-      .trim();
+    document
+      .getElementById(
+        "setup-class"
+      )
+      .value.trim();
 
   if (!name || !className) {
-    showToast("名前とクラスを入力してください");
     return;
   }
 
-  const button =
-    document.getElementById("setup-button");
-
-  button.disabled = true;
-  button.textContent = "作成中…";
-
   try {
-    const user = await api("/api/users", {
-      method: "POST",
-      body: JSON.stringify({
-        name,
-        className
-      })
-    });
+    const user =
+      await api(
+        "/api/users",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name,
+            className
+          })
+        }
+      );
 
     me = user;
 
-    localStorage.setItem(
-      meKey,
-      JSON.stringify(me)
-    );
+    saveMe();
 
-    connectSocket();
+    socket.emit(
+      "identify",
+      me.id
+    );
 
     await loadFriends();
-    await loadFriendRequests();
+    await loadRequests();
 
-    showMain();
+    renderFriendsPage();
 
-    showToast("morimoriへようこそ");
+    requestNotificationPermission();
   } catch (error) {
-    showToast(error.message);
-
-    button.disabled = false;
-    button.textContent = "はじめる";
+    showToast(
+      error.message
+    );
   }
 }
 
-/* =========================
-   Socket
-========================= */
-
-function connectSocket() {
-  socket.emit("identify", me.id);
-}
-
-socket.on("connect", () => {
-  if (me?.id) {
-    socket.emit("identify", me.id);
-  }
-});
-
-socket.on("message", message => {
-  if (!currentChatUser) {
-    loadFriends();
-    return;
-  }
-
-  const related =
-    message.from === currentChatUser.id ||
-    message.to === currentChatUser.id;
-
-  if (!related) {
-    loadFriends();
-    return;
-  }
-
-  const exists =
-    messages.some(
-      item => item.id === message.id
-    );
-
-  if (!exists) {
-    messages.push(message);
-  }
-
-  renderMessages();
-
-  if (message.to === me.id) {
-    socket.emit("mark-read", {
-      otherUserId: currentChatUser.id
-    });
-  }
-
-  loadFriends();
-});
-
-socket.on("messages-read", () => {
-  if (currentChatUser) {
-    loadMessages(currentChatUser.id);
-  }
-
-  loadFriends();
-});
-
-socket.on("presence", data => {
-  updateUserPresence(data);
-});
-
-socket.on("user-updated", user => {
-  if (me?.id === user.id) {
-    me = user;
-    localStorage.setItem(
-      meKey,
-      JSON.stringify(me)
-    );
-  }
-
-  updateCachedUser(user);
-
-  if (currentChatUser?.id === user.id) {
-    currentChatUser = user;
-    renderChatHeader();
-  }
-
-  renderFriends();
-});
-
-socket.on("friend-request", async data => {
-  friendRequestCount++;
-
-  showToast(
-    `${data?.fromUser?.name || "ユーザー"}から友達申請`
-  );
-
-  if ("Notification" in window &&
-      Notification.permission === "granted") {
-    try {
-      new Notification("morimori", {
-        body:
-          `${data?.fromUser?.name || "ユーザー"}から友達申請が届きました`
-      });
-    } catch {}
-  }
-
-  await loadFriendRequests();
-  renderMain();
-});
-
-socket.on("friend-added", async data => {
-  showToast(
-    `${data?.user?.name || "ユーザー"}と友達になりました`
-  );
-
-  await loadFriends();
-  renderMain();
-});
-
-socket.on("friend-removed", async () => {
-  await loadFriends();
-
-  if (
-    currentChatUser &&
-    !friends.some(
-      user => user.id === currentChatUser.id
-    )
-  ) {
-    currentChatUser = null;
-    showFriends();
-  }
-});
-
-socket.on("new-message-notification", data => {
-  if (
-    currentChatUser &&
-    data?.from?.id === currentChatUser.id
-  ) {
-    return;
-  }
-
-  const name =
-    data?.from?.name || "メッセージ";
-
-  showToast(`${name}から新しいメッセージ`);
-
-  if (
-    "Notification" in window &&
-    Notification.permission === "granted"
-  ) {
-    try {
-      new Notification(name, {
-        body:
-          data?.message?.text ||
-          "新しいメッセージがあります"
-      });
-    } catch {}
-  }
-
-  loadFriends();
-});
-
-socket.on("reply-notification", data => {
-  showToast(
-    `${data?.from || "ユーザー"}があなたのメッセージに返信しました`
-  );
-});
-
-socket.on("message-deleted", data => {
-  messages = messages.map(message => {
-    if (message.id === data.messageId) {
-      return {
-        ...message,
-        deleted: true,
-        text: ""
-      };
-    }
-
-    return message;
-  });
-
-  renderMessages();
-});
-
-/* =========================
+/* ==================================================
    データ取得
-========================= */
+================================================== */
 
 async function loadFriends() {
-  if (!me?.id) return;
+  if (!me) return;
 
-  try {
-    friends = await api(
+  friends =
+    await api(
       `/api/friends/${me.id}`
     );
-  } catch {
-    friends = [];
-  }
 }
 
-async function loadFriendRequests() {
-  if (!me?.id) return;
+async function loadRequests() {
+  if (!me) return;
 
-  try {
-    const data = await api(
+  const data =
+    await api(
       `/api/friend-requests/${me.id}`
     );
 
-    friendRequestCount =
-      data.incoming?.length || 0;
-  } catch {
-    friendRequestCount = 0;
-  }
+  incomingRequests =
+    data.incoming || [];
+
+  outgoingRequests =
+    data.outgoing || [];
 }
 
 async function loadUsers() {
-  try {
-    users = await api("/api/users");
-  } catch {
-    users = [];
-  }
-}
-
-async function loadMessages(otherUserId) {
-  try {
-    messages = await api(
-      `/api/messages/${me.id}/${otherUserId}`
+  allUsers =
+    await api(
+      "/api/users"
     );
-  } catch {
-    messages = [];
-  }
-
-  renderMessages();
-
-  socket.emit("mark-read", {
-    otherUserId
-  });
-
-  await loadFriends();
 }
 
-/* =========================
-   メインUI
-========================= */
+/* ==================================================
+   ナビゲーション
+================================================== */
 
-function showMain() {
-  renderMain();
+function renderNavigation() {
+  return `
+    <nav class="bottom-nav">
+
+      <button
+        class="nav-item ${
+          currentPage === "friends"
+            ? "active"
+            : ""
+        }"
+        data-page="friends"
+      >
+        <span>👥</span>
+        <small>友達</small>
+      </button>
+
+      <button
+        class="nav-item ${
+          currentPage === "search"
+            ? "active"
+            : ""
+        }"
+        data-page="search"
+      >
+        <span>⌕</span>
+        <small>検索</small>
+      </button>
+
+      <button
+        class="nav-item ${
+          currentPage === "requests"
+            ? "active"
+            : ""
+        }"
+        data-page="requests"
+      >
+        <span>◉</span>
+        <small>申請</small>
+      </button>
+
+      <button
+        class="nav-item ${
+          currentPage === "profile"
+            ? "active"
+            : ""
+        }"
+        data-page="profile"
+      >
+        <span>●</span>
+        <small>設定</small>
+      </button>
+
+    </nav>
+  `;
 }
 
-function renderMain() {
-  if (currentScreen === "chat" && currentChatUser) {
-    renderChatScreen();
-    return;
-  }
+function bindNavigation() {
+  document
+    .querySelectorAll(
+      ".nav-item"
+    )
+    .forEach(button => {
+      button.addEventListener(
+        "click",
+        async () => {
+          const page =
+            button.dataset.page;
 
-  if (currentScreen === "profile") {
-    renderProfileScreen();
-    return;
-  }
+          currentPage = page;
 
-  if (currentScreen === "friends") {
-    renderFriendsScreen();
-    return;
-  }
+          if (
+            page === "friends"
+          ) {
+            await loadFriends();
+            renderFriendsPage();
+          }
 
-  if (currentScreen === "requests") {
-    renderRequestsScreen();
-    return;
-  }
+          if (
+            page === "search"
+          ) {
+            await loadUsers();
+            renderSearchPage();
+          }
 
-  renderFriendsScreen();
+          if (
+            page === "requests"
+          ) {
+            await loadRequests();
+            renderRequestsPage();
+          }
+
+          if (
+            page === "profile"
+          ) {
+            renderProfilePage();
+          }
+        }
+      );
+    });
 }
 
-/* =========================
-   友達画面
-========================= */
+/* ==================================================
+   友達一覧
+================================================== */
 
-function renderFriendsScreen() {
-  currentScreen = "friends";
+function renderFriendsPage() {
+  currentPage =
+    "friends";
 
   app.innerHTML = `
     <div class="app-shell">
 
       <header class="topbar">
+
         <div>
-          <div class="topbar-title">友達</div>
+          <div class="topbar-title">
+            友達
+          </div>
+
           <div class="topbar-subtitle">
-            ${escapeHtml(me?.name || "")}
+            ${escapeHtml(me.name)}
           </div>
         </div>
 
         <div class="topbar-actions">
-          <button
-            class="icon-button"
-            id="search-friends-button"
-            title="検索"
-          >⌕</button>
 
           <button
             class="icon-button"
-            id="profile-button"
-            title="プロフィール"
-          >◉</button>
+            id="refresh-friends"
+            title="更新"
+          >
+            ↻
+          </button>
+
         </div>
+
       </header>
 
       <main class="main-content">
+
         <div class="friend-tools">
+
           <button
             class="add-friend-button"
-            id="add-friend-button"
+            id="add-friend"
           >
             ＋ 友達を追加
           </button>
 
-          ${
-            friendRequestCount > 0
-              ? `
-                <button
-                  class="request-button"
-                  id="requests-button"
-                >
-                  友達申請
-                  <span class="badge">
-                    ${friendRequestCount}
-                  </span>
-                </button>
-              `
-              : ""
-          }
+          <button
+            class="request-button"
+            id="open-requests"
+          >
+            申請
+            ${
+              incomingRequests.length
+                ? `<span class="badge">
+                    ${incomingRequests.length}
+                   </span>`
+                : ""
+            }
+          </button>
+
         </div>
 
-        <div id="friends-content"></div>
+        <section class="friend-section">
+
+          <div class="section-title">
+            お気に入り
+          </div>
+
+          <div
+            class="friend-list"
+            id="favorite-list"
+          ></div>
+
+        </section>
+
+        <section class="friend-section">
+
+          <div class="section-title">
+            最近のやりとり
+          </div>
+
+          <div
+            class="friend-list"
+            id="recent-list"
+          ></div>
+
+        </section>
+
+        <section class="friend-section">
+
+          <div class="section-title">
+            友達
+          </div>
+
+          <div
+            class="friend-list"
+            id="normal-list"
+          ></div>
+
+        </section>
+
       </main>
 
-      ${bottomNavigation("friends")}
+      ${renderNavigation()}
 
     </div>
   `;
 
   document
-    .getElementById("add-friend-button")
+    .getElementById(
+      "add-friend"
+    )
     .addEventListener(
       "click",
-      showAddFriendScreen
-    );
+      () => {
+        currentPage =
+          "search";
 
-  document
-    .getElementById("profile-button")
-    .addEventListener(
-      "click",
-      showProfile
-    );
-
-  document
-    .getElementById("search-friends-button")
-    .addEventListener(
-      "click",
-      showFriendSearch
-    );
-
-  document
-    .getElementById("requests-button")
-    ?.addEventListener(
-      "click",
-      showRequests
-    );
-
-  renderFriends();
-}
-
-function renderFriends() {
-  const container =
-    document.getElementById(
-      "friends-content"
-    );
-
-  if (!container) return;
-
-  const favoriteFriends =
-    friends.filter(
-      friend => friend.favorite
-    );
-
-  const recentFriends =
-    friends.filter(
-      friend => !friend.favorite
-    );
-
-  container.innerHTML = `
-    ${
-      favoriteFriends.length
-        ? `
-          <section class="friend-section">
-            <div class="section-title">
-              ⭐ お気に入り
-            </div>
-
-            <div class="friend-list">
-              ${favoriteFriends
-                .map(friendCard)
-                .join("")}
-            </div>
-          </section>
-        `
-        : ""
-    }
-
-    <section class="friend-section">
-      <div class="section-title">
-        ${
-          favoriteFriends.length
-            ? "最近のやりとり"
-            : "友達"
-        }
-      </div>
-
-      ${
-        recentFriends.length
-          ? `
-            <div class="friend-list">
-              ${recentFriends
-                .map(friendCard)
-                .join("")}
-            </div>
-          `
-          : `
-            <div class="empty-state">
-              <div class="empty-icon">👥</div>
-              <div>まだ友達がいません</div>
-              <button
-                class="primary-button small"
-                id="empty-add-friend"
-              >
-                友達を追加
-              </button>
-            </div>
-          `
+        renderSearchPage();
       }
-    </section>
-  `;
-
-  container
-    .querySelectorAll(".friend-card")
-    .forEach(card => {
-      card.addEventListener("click", () => {
-        const user =
-          friends.find(
-            friend =>
-              friend.id === card.dataset.id
-          );
-
-        if (user) {
-          openChat(user);
-        }
-      });
-    });
+    );
 
   document
-    .getElementById("empty-add-friend")
-    ?.addEventListener(
+    .getElementById(
+      "open-requests"
+    )
+    .addEventListener(
       "click",
-      showAddFriendScreen
+      async () => {
+        currentPage =
+          "requests";
+
+        await loadRequests();
+
+        renderRequestsPage();
+      }
     );
+
+  document
+    .getElementById(
+      "refresh-friends"
+    )
+    .addEventListener(
+      "click",
+      async () => {
+        await loadFriends();
+
+        renderFriendsPage();
+      }
+    );
+
+  renderFriendLists();
+
+  bindNavigation();
 }
 
-function friendCard(friend) {
-  const unread =
-    Number(friend.unread || 0);
+function renderFriendLists() {
+  const favoriteList =
+    document.getElementById(
+      "favorite-list"
+    );
 
+  const recentList =
+    document.getElementById(
+      "recent-list"
+    );
+
+  const normalList =
+    document.getElementById(
+      "normal-list"
+    );
+
+  if (!favoriteList) {
+    return;
+  }
+
+  const favorites =
+    friends.filter(
+      friend =>
+        friend.favorite
+    );
+
+  const recent =
+    friends
+      .filter(
+        friend =>
+          !friend.favorite &&
+          friend.lastMessageAt
+      )
+      .sort(
+        (a, b) =>
+          b.lastMessageAt -
+          a.lastMessageAt
+      );
+
+  const normal =
+    friends.filter(
+      friend =>
+        !friend.favorite &&
+        !friend.lastMessageAt
+    );
+
+  favoriteList.innerHTML =
+    favorites.length
+      ? favorites
+          .map(
+            friendCardHtml
+          )
+          .join("")
+      : emptyMiniHtml(
+          "お気に入りはありません"
+        );
+
+  recentList.innerHTML =
+    recent.length
+      ? recent
+          .map(
+            friendCardHtml
+          )
+          .join("")
+      : emptyMiniHtml(
+          "最近のやりとりはありません"
+        );
+
+  normalList.innerHTML =
+    normal.length
+      ? normal
+          .map(
+            friendCardHtml
+          )
+          .join("")
+      : emptyMiniHtml(
+          "友達を追加してみよう"
+        );
+
+  bindFriendCards();
+}
+
+function emptyMiniHtml(text) {
+  return `
+    <div class="empty-state small-empty">
+      ${escapeHtml(text)}
+    </div>
+  `;
+}
+
+function friendCardHtml(friend) {
   return `
     <button
       class="friend-card"
-      data-id="${escapeHtml(friend.id)}"
+      data-user-id="${friend.id}"
     >
+
       ${avatarHtml(friend)}
 
       <div class="friend-info">
+
         <div class="friend-name-row">
+
           <span class="friend-name">
-            ${escapeHtml(friend.name)}
+            ${escapeHtml(
+              friend.name
+            )}
           </span>
+
+          ${
+            friend.favorite
+              ? `<span class="favorite-star">★</span>`
+              : ""
+          }
 
           ${
             friend.online
@@ -766,154 +753,214 @@ function friendCard(friend) {
               : ""
           }
 
+        </div>
+
+        <div class="friend-class">
+          ${escapeHtml(
+            friend.className
+          )}
+
           ${
-            friend.favorite
-              ? `<span class="favorite-star">★</span>`
+            friend.lastMessageText
+              ? ` · ${escapeHtml(
+                  friend.lastMessageText
+                    .slice(0, 25)
+                )}`
               : ""
           }
         </div>
 
-        <div class="friend-class">
-          ${escapeHtml(friend.className)}
-        </div>
       </div>
 
       <div class="friend-meta">
+
         ${
           friend.lastMessageAt
-            ? `
-              <div class="last-time">
+            ? `<div class="last-time">
                 ${formatTime(
                   friend.lastMessageAt
                 )}
-              </div>
-            `
+              </div>`
             : ""
         }
 
         ${
-          unread
-            ? `
-              <div class="unread-badge">
-                ${unread > 99 ? "99+" : unread}
-              </div>
-            `
+          friend.unread
+            ? `<div class="unread-badge">
+                ${
+                  friend.unread > 99
+                    ? "99+"
+                    : friend.unread
+                }
+              </div>`
             : ""
         }
+
       </div>
+
     </button>
   `;
 }
 
-/* =========================
-   友達追加
-========================= */
+function bindFriendCards() {
+  document
+    .querySelectorAll(
+      ".friend-card"
+    )
+    .forEach(card => {
+      card.addEventListener(
+        "click",
+        () => {
+          const userId =
+            card.dataset.userId;
 
-async function showAddFriendScreen() {
-  currentScreen = "add-friend";
+          const friend =
+            friends.find(
+              item =>
+                item.id === userId
+            );
 
-  await loadUsers();
+          if (friend) {
+            openChat(friend);
+          }
+        }
+      );
+    });
+}
+
+/* ==================================================
+   検索
+================================================== */
+
+function renderSearchPage() {
+  currentPage =
+    "search";
 
   app.innerHTML = `
     <div class="app-shell">
 
-      <header class="chat-header">
-        <button
-          class="back-button"
-          id="back-friends"
-        >
-          ←
-        </button>
+      <header class="topbar">
 
         <div>
-          <div class="chat-title">
+          <div class="topbar-title">
             友達を追加
           </div>
+
+          <div class="topbar-subtitle">
+            名前またはクラスで探せます
+          </div>
         </div>
+
       </header>
 
       <main class="main-content">
+
         <div class="search-box">
+
           <input
             id="user-search"
             type="search"
-            placeholder="名前・クラスで検索"
+            placeholder="名前・クラスを検索"
             autocomplete="off"
           >
+
         </div>
 
         <div
-          class="user-search-results"
           id="user-search-results"
+          class="user-search-results"
         ></div>
+
       </main>
+
+      ${renderNavigation()}
 
     </div>
   `;
 
-  document
-    .getElementById("back-friends")
-    .addEventListener(
-      "click",
-      showFriends
-    );
-
-  document
-    .getElementById("user-search")
-    .addEventListener(
-      "input",
-      renderUserSearch
-    );
-
-  renderUserSearch();
-}
-
-function renderUserSearch() {
   const input =
     document.getElementById(
       "user-search"
     );
 
+  input.addEventListener(
+    "input",
+    () => {
+      clearTimeout(
+        searchTimer
+      );
+
+      searchTimer =
+        setTimeout(
+          () => {
+            renderUserSearchResults(
+              input.value
+            );
+          },
+          120
+        );
+    }
+  );
+
+  renderUserSearchResults(
+    ""
+  );
+
+  bindNavigation();
+}
+
+function renderUserSearchResults(
+  keyword
+) {
   const container =
     document.getElementById(
       "user-search-results"
     );
 
-  if (!input || !container) return;
+  if (!container) {
+    return;
+  }
 
-  const keyword =
-    input.value.trim().toLowerCase();
+  const q =
+    keyword
+      .trim()
+      .toLowerCase();
 
-  const results =
-    users.filter(user => {
-      if (user.id === me.id) {
-        return false;
-      }
+  const users =
+    allUsers.filter(
+      user =>
+        user.id !== me.id &&
+        (
+          !q ||
+          user.name
+            .toLowerCase()
+            .includes(q) ||
+          user.className
+            .toLowerCase()
+            .includes(q)
+        )
+    );
 
-      if (!keyword) {
-        return true;
-      }
-
-      return (
-        user.name
-          .toLowerCase()
-          .includes(keyword) ||
-        user.className
-          .toLowerCase()
-          .includes(keyword)
+  if (!users.length) {
+    container.innerHTML =
+      emptyMiniHtml(
+        q
+          ? "ユーザーが見つかりません"
+          : "友達に追加したい人を検索"
       );
-    });
+
+    return;
+  }
 
   container.innerHTML =
-    results.length
-      ? results
-          .map(user => userSearchCard(user))
-          .join("")
-      : `
-        <div class="empty-state">
-          該当するユーザーがいません
-        </div>
-      `;
+    users
+      .map(
+        user =>
+          userSearchCardHtml(
+            user
+          )
+      )
+      .join("");
 
   container
     .querySelectorAll(
@@ -923,157 +970,89 @@ function renderUserSearch() {
       card.addEventListener(
         "click",
         () => {
-          const user =
-            users.find(
-              item =>
-                item.id ===
-                card.dataset.id
-            );
-
-          if (user) {
-            showUserProfile(user);
-          }
+          sendFriendRequest(
+            card.dataset.userId
+          );
         }
       );
     });
 }
 
-function userSearchCard(user) {
-  const isFriend =
+function userSearchCardHtml(user) {
+  const friend =
     friends.some(
-      friend => friend.id === user.id
+      item =>
+        item.id === user.id
     );
+
+  const pendingOut =
+    outgoingRequests.some(
+      request =>
+        request.to === user.id &&
+        request.status ===
+          "pending"
+    );
+
+  const pendingIn =
+    incomingRequests.some(
+      request =>
+        request.from === user.id &&
+        request.status ===
+          "pending"
+    );
+
+  let action =
+    "＋ 追加";
+
+  if (friend) {
+    action =
+      "✓ 友達";
+  } else if (pendingOut) {
+    action =
+      "申請済み";
+  } else if (pendingIn) {
+    action =
+      "承認待ち";
+  }
 
   return `
     <button
       class="user-search-card"
-      data-id="${escapeHtml(user.id)}"
+      data-user-id="${user.id}"
+      ${friend || pendingOut || pendingIn
+        ? "disabled"
+        : ""}
     >
+
       ${avatarHtml(user)}
 
       <div class="friend-info">
+
         <div class="friend-name">
-          ${escapeHtml(user.name)}
+          ${escapeHtml(
+            user.name
+          )}
         </div>
 
         <div class="friend-class">
-          ${escapeHtml(user.className)}
+          ${escapeHtml(
+            user.className
+          )}
         </div>
+
       </div>
 
       <div class="search-card-status">
-        ${
-          isFriend
-            ? "友達"
-            : "›"
-        }
+        ${action}
       </div>
+
     </button>
   `;
 }
 
-/* =========================
-   ユーザープロフィール
-========================= */
-
-function showUserProfile(user) {
-  const isFriend =
-    friends.some(
-      friend => friend.id === user.id
-    );
-
-  app.innerHTML = `
-    <div class="app-shell">
-
-      <header class="chat-header">
-        <button
-          class="back-button"
-          id="back-user-search"
-        >
-          ←
-        </button>
-
-        <div class="chat-title">
-          プロフィール
-        </div>
-      </header>
-
-      <main class="profile-content">
-
-        <div class="profile-card">
-
-          ${avatarHtml(user, "large")}
-
-          <h2>
-            ${escapeHtml(user.name)}
-          </h2>
-
-          <div class="profile-class">
-            ${escapeHtml(user.className)}
-          </div>
-
-          <div class="profile-status">
-            ${
-              user.online
-                ? "🟢 オンライン"
-                : "オフライン"
-            }
-          </div>
-
-          ${
-            isFriend
-              ? `
-                <button
-                  class="primary-button"
-                  id="profile-chat"
-                >
-                  チャット
-                </button>
-              `
-              : `
-                <button
-                  class="primary-button"
-                  id="send-friend-request"
-                >
-                  ＋ 友達追加
-                </button>
-              `
-          }
-
-        </div>
-
-      </main>
-
-    </div>
-  `;
-
-  document
-    .getElementById("back-user-search")
-    .addEventListener(
-      "click",
-      showAddFriendScreen
-    );
-
-  if (isFriend) {
-    document
-      .getElementById("profile-chat")
-      .addEventListener(
-        "click",
-        () => openChat(user)
-      );
-  } else {
-    document
-      .getElementById(
-        "send-friend-request"
-      )
-      .addEventListener(
-        "click",
-        () => sendFriendRequest(user)
-      );
-  }
-}
-
-async function sendFriendRequest(user) {
+async function sendFriendRequest(
+  userId
+) {
   try {
     await api(
       "/api/friend-requests",
@@ -1081,204 +1060,231 @@ async function sendFriendRequest(user) {
         method: "POST",
         body: JSON.stringify({
           from: me.id,
-          to: user.id
+          to: userId
         })
       }
     );
 
-    showToast("友達申請を送りました");
+    await loadRequests();
 
-    setTimeout(
-      showAddFriendScreen,
-      500
+    showToast(
+      "友達申請を送りました"
+    );
+
+    const input =
+      document.getElementById(
+        "user-search"
+      );
+
+    renderUserSearchResults(
+      input?.value || ""
     );
   } catch (error) {
-    showToast(error.message);
+    showToast(
+      error.message
+    );
   }
 }
 
-/* =========================
+/* ==================================================
    申請
-========================= */
+================================================== */
 
-async function showRequests() {
-  currentScreen = "requests";
-
-  let data;
-
-  try {
-    data = await api(
-      `/api/friend-requests/${me.id}`
-    );
-  } catch {
-    data = {
-      incoming: [],
-      outgoing: []
-    };
-  }
+function renderRequestsPage() {
+  currentPage =
+    "requests";
 
   app.innerHTML = `
     <div class="app-shell">
 
-      <header class="chat-header">
-        <button
-          class="back-button"
-          id="back-requests"
-        >
-          ←
-        </button>
+      <header class="topbar">
 
-        <div class="chat-title">
-          友達申請
+        <div>
+          <div class="topbar-title">
+            友達申請
+          </div>
+
+          <div class="topbar-subtitle">
+            ${incomingRequests.length}
+            件の申請
+          </div>
         </div>
+
       </header>
 
       <main class="main-content">
 
         <section class="friend-section">
+
           <div class="section-title">
-            届いた申請
+            受信した申請
           </div>
 
-          <div id="incoming-requests">
-            ${
-              data.incoming.length
-                ? data.incoming
-                    .map(
-                      requestCard
-                    )
-                    .join("")
-                : `
-                  <div class="empty-state small-empty">
-                    申請はありません
-                  </div>
-                `
-            }
-          </div>
+          <div id="incoming-list"></div>
+
         </section>
 
         <section class="friend-section">
+
           <div class="section-title">
-            送った申請
+            送信した申請
           </div>
 
-          <div>
-            ${
-              data.outgoing.length
-                ? data.outgoing
-                    .map(
-                      outgoingRequestCard
-                    )
-                    .join("")
-                : `
-                  <div class="empty-state small-empty">
-                    送信中の申請はありません
-                  </div>
-                `
-            }
-          </div>
+          <div id="outgoing-list"></div>
+
         </section>
 
       </main>
 
+      ${renderNavigation()}
+
     </div>
   `;
 
-  document
-    .getElementById("back-requests")
-    .addEventListener(
-      "click",
-      showFriends
+  renderRequestsLists();
+
+  bindNavigation();
+}
+
+function renderRequestsLists() {
+  const incoming =
+    document.getElementById(
+      "incoming-list"
     );
 
-  document
+  const outgoing =
+    document.getElementById(
+      "outgoing-list"
+    );
+
+  if (!incoming) return;
+
+  incoming.innerHTML =
+    incomingRequests.length
+      ? incomingRequests
+          .map(
+            incomingRequestHtml
+          )
+          .join("")
+      : emptyMiniHtml(
+          "新しい申請はありません"
+        );
+
+  outgoing.innerHTML =
+    outgoingRequests.length
+      ? outgoingRequests
+          .map(
+            outgoingRequestHtml
+          )
+          .join("")
+      : emptyMiniHtml(
+          "送信した申請はありません"
+        );
+
+  incoming
     .querySelectorAll(
-      "[data-request-action]"
+      "[data-action]"
     )
     .forEach(button => {
       button.addEventListener(
         "click",
-        async () => {
-          const requestId =
-            button.dataset.requestId;
-
-          const action =
-            button.dataset.requestAction;
-
-          await handleFriendRequest(
-            requestId,
-            action
+        () => {
+          handleRequest(
+            button.dataset.id,
+            button.dataset.action
           );
         }
       );
     });
 }
 
-function requestCard(request) {
+function incomingRequestHtml(
+  request
+) {
   const user =
     request.fromUser;
 
   return `
     <div class="request-card">
+
       ${avatarHtml(user)}
 
       <div class="friend-info">
+
         <div class="friend-name">
-          ${escapeHtml(user?.name)}
+          ${escapeHtml(
+            user.name
+          )}
         </div>
 
         <div class="friend-class">
-          ${escapeHtml(user?.className)}
+          ${escapeHtml(
+            user.className
+          )}
         </div>
+
       </div>
 
       <div class="request-actions">
+
         <button
           class="accept-button"
-          data-request-id="${request.id}"
-          data-request-action="accept"
+          data-id="${request.id}"
+          data-action="accept"
         >
           承認
         </button>
 
         <button
           class="reject-button"
-          data-request-id="${request.id}"
-          data-request-action="reject"
+          data-id="${request.id}"
+          data-action="reject"
         >
           拒否
         </button>
+
       </div>
+
     </div>
   `;
 }
 
-function outgoingRequestCard(request) {
+function outgoingRequestHtml(
+  request
+) {
   const user =
     request.toUser;
 
   return `
     <div class="request-card">
+
       ${avatarHtml(user)}
 
       <div class="friend-info">
+
         <div class="friend-name">
-          ${escapeHtml(user?.name)}
+          ${escapeHtml(
+            user.name
+          )}
         </div>
 
         <div class="friend-class">
-          ${escapeHtml(user?.className)}
+          ${escapeHtml(
+            user.className
+          )}
         </div>
+
       </div>
 
       <div class="request-pending">
         申請中
       </div>
+
     </div>
   `;
 }
 
-async function handleFriendRequest(
+async function handleRequest(
   requestId,
   action
 ) {
@@ -1290,54 +1296,81 @@ async function handleFriendRequest(
       }
     );
 
-    await loadFriendRequests();
     await loadFriends();
+    await loadRequests();
 
-    showRequests();
+    showToast(
+      action === "accept"
+        ? "友達に追加しました"
+        : "申請を拒否しました"
+    );
+
+    renderRequestsPage();
   } catch (error) {
-    showToast(error.message);
+    showToast(
+      error.message
+    );
   }
 }
 
-/* =========================
+/* ==================================================
    チャット
-========================= */
+================================================== */
 
 async function openChat(user) {
-  currentChatUser = user;
-  currentScreen = "chat";
-  replyTarget = null;
+  currentChatUser =
+    user;
 
-  renderChatScreen();
+  replyTarget =
+    null;
 
-  await loadMessages(user.id);
+  try {
+    currentMessages =
+      await api(
+        `/api/messages/${me.id}/${user.id}`
+      );
+  } catch {
+    currentMessages = [];
+  }
+
+  renderChat();
+
+  markCurrentChatRead();
 }
 
-function renderChatScreen() {
-  app.innerHTML = `
-    <div class="app-shell chat-shell">
+function renderChat() {
+  if (!currentChatUser) {
+    return;
+  }
 
-      <header
-        class="chat-header"
-        id="chat-header"
-      >
+  app.innerHTML = `
+    <div
+      class="app-shell chat-shell"
+    >
+
+      <header class="chat-header">
+
         <button
           class="back-button"
           id="chat-back"
         >
-          ←
+          ‹
         </button>
 
         <button
           class="chat-user-button"
           id="chat-user-profile"
         >
-          ${avatarHtml(currentChatUser)}
+
+          ${avatarHtml(
+            currentChatUser
+          )}
 
           <div class="chat-user-info">
+
             <div class="chat-title">
               ${escapeHtml(
-                currentChatUser?.name
+                currentChatUser.name
               )}
             </div>
 
@@ -1346,22 +1379,22 @@ function renderChatScreen() {
               id="chat-presence"
             >
               ${
-                currentChatUser?.online
+                currentChatUser.online
                   ? "オンライン"
-                  : escapeHtml(
-                      currentChatUser?.className ||
-                      ""
-                    )
+                  : "オフライン"
               }
             </div>
+
           </div>
+
         </button>
 
         <div class="chat-actions">
+
           <button
             class="icon-button"
             title="音声通話"
-            id="voice-call"
+            disabled
           >
             ☎
           </button>
@@ -1369,11 +1402,13 @@ function renderChatScreen() {
           <button
             class="icon-button"
             title="ビデオ通話"
-            id="video-call"
+            disabled
           >
             ▣
           </button>
+
         </div>
+
       </header>
 
       <main
@@ -1382,16 +1417,18 @@ function renderChatScreen() {
       ></main>
 
       <div
-        class="reply-preview"
-        id="reply-preview"
-        hidden
+        id="reply-preview-container"
       ></div>
 
-      <div class="composer">
+      <form
+        class="composer"
+        id="composer"
+      >
 
         <button
+          type="button"
           class="composer-plus"
-          id="composer-plus"
+          id="plus-button"
         >
           ＋
         </button>
@@ -1404,136 +1441,109 @@ function renderChatScreen() {
         ></textarea>
 
         <button
+          type="submit"
           class="send-button"
-          id="send-button"
         >
           ↑
         </button>
 
-      </div>
+      </form>
 
     </div>
   `;
 
+  renderMessages();
+  renderReplyPreview();
+
   document
-    .getElementById("chat-back")
+    .getElementById(
+      "chat-back"
+    )
     .addEventListener(
       "click",
-      showFriends
+      async () => {
+        currentChatUser =
+          null;
+
+        await loadFriends();
+
+        renderFriendsPage();
+      }
     );
 
   document
     .getElementById(
-      "chat-user-profile"
+      "composer"
+    )
+    .addEventListener(
+      "submit",
+      sendCurrentMessage
+    );
+
+  const input =
+    document.getElementById(
+      "message-input"
+    );
+
+  input.addEventListener(
+    "keydown",
+    event => {
+      if (
+        event.key ===
+          "Enter" &&
+        !event.shiftKey
+      ) {
+        if (
+          event.isComposing ||
+          event.keyCode === 229
+        ) {
+          return;
+        }
+
+        event.preventDefault();
+
+        document
+          .getElementById(
+            "composer"
+          )
+          .requestSubmit();
+      }
+    }
+  );
+
+  input.addEventListener(
+    "input",
+    autoResizeTextarea
+  );
+
+  document
+    .getElementById(
+      "plus-button"
     )
     .addEventListener(
       "click",
       () => {
-        showUserProfile(
-          currentChatUser
-        );
-      }
-    );
-
-  document
-    .getElementById("send-button")
-    .addEventListener(
-      "click",
-      sendMessage
-    );
-
-  document
-    .getElementById("message-input")
-    .addEventListener(
-      "keydown",
-      handleMessageKeydown
-    );
-
-  document
-    .getElementById("message-input")
-    .addEventListener(
-      "input",
-      autoResizeTextarea
-    );
-
-  document
-    .getElementById("composer-plus")
-    .addEventListener(
-      "click",
-      () => {
         showToast(
-          "画像・ファイル送信は次の機能として追加できます"
+          "画像・ファイル送信は次の段階で追加します"
         );
       }
     );
-
-  document
-    .getElementById("voice-call")
-    .addEventListener(
-      "click",
-      () => {
-        showToast(
-          "音声通話機能を準備中です"
-        );
-      }
-    );
-
-  document
-    .getElementById("video-call")
-    .addEventListener(
-      "click",
-      () => {
-        showToast(
-          "ビデオ通話機能を準備中です"
-        );
-      }
-    );
-
-  renderMessages();
-  renderReplyPreview();
 }
 
-function renderChatHeader() {
-  const header =
-    document.getElementById(
-      "chat-header"
-    );
+function autoResizeTextarea(
+  event
+) {
+  const textarea =
+    event.target;
 
-  if (!header || !currentChatUser) {
-    return;
-  }
+  textarea.style.height =
+    "auto";
 
-  const userButton =
-    document.getElementById(
-      "chat-user-profile"
-    );
-
-  if (!userButton) return;
-
-  userButton.innerHTML = `
-    ${avatarHtml(currentChatUser)}
-
-    <div class="chat-user-info">
-      <div class="chat-title">
-        ${escapeHtml(
-          currentChatUser.name
-        )}
-      </div>
-
-      <div
-        class="chat-presence"
-        id="chat-presence"
-      >
-        ${
-          currentChatUser.online
-            ? "オンライン"
-            : escapeHtml(
-                currentChatUser.className
-              )
-        }
-      </div>
-    </div>
-  `;
+  textarea.style.height =
+    Math.min(
+      textarea.scrollHeight,
+      140
+    ) + "px";
 }
 
 function renderMessages() {
@@ -1542,55 +1552,70 @@ function renderMessages() {
       "messages"
     );
 
-  if (!container) return;
+  if (!container) {
+    return;
+  }
 
-  if (!messages.length) {
+  if (!currentMessages.length) {
     container.innerHTML = `
       <div class="chat-empty">
-        <div class="chat-empty-avatar">
-          ${avatarHtml(
-            currentChatUser,
-            "large"
-          )}
-        </div>
+
+        ${avatarHtml(
+          currentChatUser,
+          true
+        )}
 
         <div class="chat-empty-name">
           ${escapeHtml(
-            currentChatUser?.name
+            currentChatUser.name
           )}
         </div>
 
         <div class="chat-empty-text">
-          メッセージを送ってみよう
+          ここからメッセージを始めよう
         </div>
+
       </div>
     `;
 
     return;
   }
 
-  container.innerHTML = messages
-    .map(messageHtml)
-    .join("");
+  container.innerHTML =
+    currentMessages
+      .map(
+        messageHtml
+      )
+      .join("");
 
   container
     .querySelectorAll(
-      "[data-reply-message]"
+      "[data-reply-id]"
     )
     .forEach(button => {
       button.addEventListener(
         "click",
         () => {
           const id =
-            button.dataset.replyMessage;
+            button.dataset.replyId;
 
           const message =
-            messages.find(
-              item => item.id === id
+            currentMessages.find(
+              item =>
+                item.id === id
             );
 
           if (message) {
-            setReplyTarget(message);
+            replyTarget =
+              message;
+
+            renderReplyPreview();
+
+            document
+              .getElementById(
+                "message-input"
+              )
+              ?.focus();
           }
         }
       );
@@ -1598,95 +1623,107 @@ function renderMessages() {
 
   container
     .querySelectorAll(
-      "[data-delete-message]"
+      "[data-delete-id]"
     )
     .forEach(button => {
       button.addEventListener(
         "click",
         () => {
           deleteMessage(
-            button.dataset.deleteMessage
+            button.dataset.deleteId
           );
         }
       );
     });
 
-  container.scrollTop =
-    container.scrollHeight;
+  requestAnimationFrame(
+    () => {
+      container.scrollTop =
+        container.scrollHeight;
+    }
+  );
 }
 
-function messageHtml(message) {
+function messageHtml(
+  message
+) {
   const mine =
     message.from === me.id;
 
-  const deleted =
-    message.deleted;
-
-  const replied =
+  const original =
     message.replyTo
-      ? messages.find(
+      ? currentMessages.find(
           item =>
-            item.id === message.replyTo
+            item.id ===
+            message.replyTo
         )
       : null;
 
   return `
     <div
-      class="
-        message-row
-        ${mine ? "mine" : "theirs"}
-      "
+      class="message-row ${
+        mine
+          ? "mine"
+          : "theirs"
+      }"
     >
+
       <div
         class="message-bubble"
-        data-message-id="${message.id}"
       >
 
         ${
-          replied
+          original
             ? `
               <div class="reply-reference">
+
                 <div class="reply-reference-name">
                   ${
-                    replied.from === me.id
-                      ? "自分"
+                    original.from === me.id
+                      ? "あなた"
                       : escapeHtml(
-                          currentChatUser?.name
+                          currentChatUser.name
                         )
                   }
                 </div>
 
                 <div class="reply-reference-text">
                   ${
-                    replied.deleted
+                    original.deleted
                       ? "削除されたメッセージ"
                       : escapeHtml(
-                          replied.text
+                          original.text
                         )
                   }
                 </div>
+
               </div>
             `
             : ""
         }
 
-        <div class="message-text ${
-          deleted ? "deleted" : ""
-        }">
+        <div
+          class="message-text ${
+            message.deleted
+              ? "deleted"
+              : ""
+          }"
+        >
           ${
-            deleted
-              ? "メッセージを削除しました"
+            message.deleted
+              ? "削除されたメッセージ"
               : escapeHtml(
                   message.text
-                ).replace(
-                  /\n/g,
+                ).replaceAll(
+                  "\n",
                   "<br>"
                 )
           }
         </div>
 
         <div class="message-bottom">
-          <span class="message-time">
+
+          <span>
             ${formatTime(
               message.createdAt
             )}
@@ -1695,49 +1732,40 @@ function messageHtml(message) {
           ${
             mine
               ? `
-                <span class="message-read">
+                <span
+                  class="message-read"
+                >
                   ${
                     message.read
                       ? "既読"
-                      : "未読"
+                      : "送信済み"
                   }
                 </span>
               `
               : ""
           }
+
         </div>
 
         ${
-          !deleted
+          !message.deleted
             ? `
               <div class="message-actions">
 
                 <button
-                  data-reply-message="${message.id}"
+                  type="button"
+                  data-reply-id="${message.id}"
                   title="返信"
                 >
                   ↩
-                </button>
-
-                <button
-                  onclick="
-                    navigator.clipboard?.writeText(
-                      ${JSON.stringify(
-                        message.text
-                      )}
-                    );
-                    showToast('コピーしました');
-                  "
-                  title="コピー"
-                >
-                  ⧉
                 </button>
 
                 ${
                   mine
                     ? `
                       <button
-                        data-delete-message="${message.id}"
+                        type="button"
+                        data-delete-id="${message.id}"
                         title="削除"
                       >
                         ×
@@ -1752,50 +1780,22 @@ function messageHtml(message) {
         }
 
       </div>
+
     </div>
   `;
 }
 
-function handleMessageKeydown(event) {
-  if (event.key !== "Enter") {
-    return;
-  }
-
-  if (event.shiftKey) {
-    return;
-  }
-
-  if (event.isComposing) {
-    return;
-  }
-
+async function sendCurrentMessage(
+  event
+) {
   event.preventDefault();
 
-  sendMessage();
-}
-
-function autoResizeTextarea(event) {
-  const textarea =
-    event.target;
-
-  textarea.style.height = "auto";
-
-  textarea.style.height =
-    Math.min(
-      textarea.scrollHeight,
-      140
-    ) + "px";
-}
-
-function sendMessage() {
   const input =
     document.getElementById(
       "message-input"
     );
 
-  if (!input || !currentChatUser) {
-    return;
-  }
+  if (!input) return;
 
   const text =
     input.value;
@@ -1807,80 +1807,94 @@ function sendMessage() {
   socket.emit(
     "send-message",
     {
-      to: currentChatUser.id,
+      to:
+        currentChatUser.id,
       text,
       replyTo:
-        replyTarget?.id || null
+        replyTarget?.id ||
+        null
     }
   );
 
   input.value = "";
-  input.style.height = "auto";
 
-  replyTarget = null;
+  input.style.height =
+    "auto";
 
-  renderReplyPreview();
-}
-
-function setReplyTarget(message) {
-  replyTarget = message;
+  replyTarget =
+    null;
 
   renderReplyPreview();
 
-  const input =
-    document.getElementById(
-      "message-input"
-    );
-
-  input?.focus();
+  input.focus();
 }
 
 function renderReplyPreview() {
-  const preview =
+  const container =
     document.getElementById(
-      "reply-preview"
+      "reply-preview-container"
     );
 
-  if (!preview) return;
-
-  if (!replyTarget) {
-    preview.hidden = true;
-    preview.innerHTML = "";
+  if (!container) {
     return;
   }
 
-  preview.hidden = false;
+  if (!replyTarget) {
+    container.innerHTML =
+      "";
 
-  preview.innerHTML = `
-    <div>
-      <div class="reply-preview-title">
-        返信
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="reply-preview">
+
+      <div>
+
+        <div class="reply-preview-title">
+          返信
+        </div>
+
+        <div class="reply-preview-text">
+          ${
+            replyTarget.deleted
+              ? "削除されたメッセージ"
+              : escapeHtml(
+                  replyTarget.text
+                )
+          }
+        </div>
+
       </div>
 
-      <div class="reply-preview-text">
-        ${escapeHtml(
-          replyTarget.text
-        )}
-      </div>
+      <button
+        type="button"
+        id="cancel-reply"
+      >
+        ×
+      </button>
+
     </div>
-
-    <button id="cancel-reply">
-      ×
-    </button>
   `;
 
   document
-    .getElementById("cancel-reply")
+    .getElementById(
+      "cancel-reply"
+    )
     .addEventListener(
       "click",
       () => {
-        replyTarget = null;
+        replyTarget =
+          null;
+
         renderReplyPreview();
       }
     );
 }
 
-async function deleteMessage(messageId) {
+async function deleteMessage(
+  messageId
+) {
   if (
     !confirm(
       "このメッセージを削除しますか？"
@@ -1896,53 +1910,50 @@ async function deleteMessage(messageId) {
         method: "DELETE"
       }
     );
-
-    messages = messages.map(
-      message => {
-        if (
-          message.id === messageId
-        ) {
-          return {
-            ...message,
-            deleted: true,
-            text: ""
-          };
-        }
-
-        return message;
-      }
-    );
-
-    renderMessages();
   } catch (error) {
-    showToast(error.message);
+    showToast(
+      error.message
+    );
   }
 }
 
-/* =========================
-   プロフィール
-========================= */
+function markCurrentChatRead() {
+  if (!currentChatUser) {
+    return;
+  }
 
-function showProfile() {
-  currentScreen = "profile";
-  renderProfileScreen();
+  socket.emit(
+    "mark-read",
+    {
+      otherUserId:
+        currentChatUser.id
+    }
+  );
 }
 
-function renderProfileScreen() {
+/* ==================================================
+   プロフィール
+================================================== */
+
+function renderProfilePage() {
+  currentPage =
+    "profile";
+
   app.innerHTML = `
     <div class="app-shell">
 
-      <header class="chat-header">
-        <button
-          class="back-button"
-          id="profile-back"
-        >
-          ←
-        </button>
+      <header class="topbar">
 
-        <div class="chat-title">
-          プロフィール
+        <div>
+          <div class="topbar-title">
+            設定
+          </div>
+
+          <div class="topbar-subtitle">
+            プロフィール
+          </div>
         </div>
+
       </header>
 
       <main class="profile-content">
@@ -1951,39 +1962,62 @@ function renderProfileScreen() {
 
           <button
             class="profile-avatar-button"
-            id="change-icon"
+            id="avatar-button"
           >
+
             ${avatarHtml(
               me,
-              "large"
+              true
             )}
 
             <span class="avatar-edit">
               ✎
             </span>
+
           </button>
 
-          <label class="profile-field">
-            <span>名前</span>
+          <input
+            type="file"
+            id="avatar-input"
+            accept="image/*"
+            hidden
+          >
 
+          <h2>
+            ${escapeHtml(
+              me.name
+            )}
+          </h2>
+
+          <div class="profile-class">
+            ${escapeHtml(
+              me.className
+            )}
+          </div>
+
+          <div class="profile-status">
+            morimori
+          </div>
+
+          <label class="profile-field">
+            表示名
             <input
               id="profile-name"
+              maxlength="40"
               value="${escapeHtml(
                 me.name
               )}"
-              maxlength="40"
             >
           </label>
 
           <label class="profile-field">
-            <span>クラス</span>
-
+            クラス
             <input
               id="profile-class"
+              maxlength="30"
               value="${escapeHtml(
                 me.className
               )}"
-              maxlength="30"
             >
           </label>
 
@@ -1994,65 +2028,70 @@ function renderProfileScreen() {
             保存
           </button>
 
-          <input
-            type="file"
-            id="icon-file"
-            accept="image/*"
-            hidden
-          >
-
         </div>
 
       </main>
 
-      ${bottomNavigation("profile")}
+      ${renderNavigation()}
 
     </div>
   `;
 
   document
-    .getElementById("profile-back")
-    .addEventListener(
-      "click",
-      showFriends
-    );
-
-  document
-    .getElementById("change-icon")
+    .getElementById(
+      "avatar-button"
+    )
     .addEventListener(
       "click",
       () => {
         document
-          .getElementById("icon-file")
+          .getElementById(
+            "avatar-input"
+          )
           .click();
       }
     );
 
   document
-    .getElementById("icon-file")
+    .getElementById(
+      "avatar-input"
+    )
     .addEventListener(
       "change",
-      handleIconChange
+      handleAvatar
     );
 
   document
-    .getElementById("save-profile")
+    .getElementById(
+      "save-profile"
+    )
     .addEventListener(
       "click",
       saveProfile
     );
+
+  bindNavigation();
 }
 
-let selectedIcon = null;
-
-function handleIconChange(event) {
+function handleAvatar(
+  event
+) {
   const file =
     event.target.files?.[0];
 
-  if (!file) return;
+  if (!file) {
+    return;
+  }
 
-  if (!file.type.startsWith("image/")) {
-    showToast("画像を選択してください");
+  if (
+    !file.type.startsWith(
+      "image/"
+    )
+  ) {
+    showToast(
+      "画像を選択してください"
+    );
+
     return;
   }
 
@@ -2060,60 +2099,118 @@ function handleIconChange(event) {
     new FileReader();
 
   reader.onload = () => {
-    selectedIcon =
-      reader.result;
+    resizeImage(
+      reader.result,
+      512
+    ).then(
+      dataUrl => {
+        me.icon =
+          dataUrl;
 
-    const button =
-      document.getElementById(
-        "change-icon"
-      );
+        saveMe();
 
-    if (button) {
-      button.innerHTML = `
-        <div class="avatar large">
-          <img
-            src="${escapeHtml(
-              selectedIcon
-            )}"
-            alt=""
-          >
-        </div>
+        renderProfilePage();
 
-        <span class="avatar-edit">
-          ✎
-        </span>
-      `;
-    }
+        showToast(
+          "アイコンを変更しました"
+        );
+      }
+    );
   };
 
-  reader.readAsDataURL(file);
+  reader.readAsDataURL(
+    file
+  );
+}
+
+function resizeImage(
+  source,
+  size
+) {
+  return new Promise(
+    resolve => {
+      const image =
+        new Image();
+
+      image.onload = () => {
+        const canvas =
+          document.createElement(
+            "canvas"
+          );
+
+        canvas.width =
+          size;
+
+        canvas.height =
+          size;
+
+        const ctx =
+          canvas.getContext(
+            "2d"
+          );
+
+        const scale =
+          Math.max(
+            size /
+              image.width,
+            size /
+              image.height
+          );
+
+        const width =
+          image.width *
+          scale;
+
+        const height =
+          image.height *
+          scale;
+
+        const x =
+          (size -
+            width) /
+          2;
+
+        const y =
+          (size -
+            height) /
+          2;
+
+        ctx.drawImage(
+          image,
+          x,
+          y,
+          width,
+          height
+        );
+
+        resolve(
+          canvas.toDataURL(
+            "image/jpeg",
+            0.85
+          )
+        );
+      };
+
+      image.src =
+        source;
+    }
+  );
 }
 
 async function saveProfile() {
   const name =
-    document.getElementById(
-      "profile-name"
-    )?.value.trim();
+    document
+      .getElementById(
+        "profile-name"
+      )
+      .value.trim();
 
   const className =
-    document.getElementById(
-      "profile-class"
-    )?.value.trim();
-
-  if (!name || !className) {
-    showToast(
-      "名前とクラスを入力してください"
-    );
-    return;
-  }
-
-  const button =
-    document.getElementById(
-      "save-profile"
-    );
-
-  button.disabled = true;
-  button.textContent = "保存中…";
+    document
+      .getElementById(
+        "profile-class"
+      )
+      .value.trim();
 
   try {
     const updated =
@@ -2125,307 +2222,355 @@ async function saveProfile() {
             name,
             className,
             icon:
-              selectedIcon ??
-              me.icon ??
-              null
+              me.icon || null
           })
         }
       );
 
     me = updated;
 
-    localStorage.setItem(
-      meKey,
-      JSON.stringify(me)
-    );
-
-    selectedIcon = null;
+    saveMe();
 
     await loadFriends();
 
-    showToast("プロフィールを更新しました");
-
-    setTimeout(
-      showFriends,
-      500
+    showToast(
+      "プロフィールを保存しました"
     );
+
+    renderProfilePage();
   } catch (error) {
-    showToast(error.message);
-
-    button.disabled = false;
-    button.textContent = "保存";
+    showToast(
+      error.message
+    );
   }
 }
 
-/* =========================
-   友達検索
-========================= */
+/* ==================================================
+   Socket.IO
+================================================== */
 
-async function showFriendSearch() {
-  currentScreen = "friend-search";
-
-  await loadFriends();
-
-  app.innerHTML = `
-    <div class="app-shell">
-
-      <header class="chat-header">
-        <button
-          class="back-button"
-          id="search-back"
-        >
-          ←
-        </button>
-
-        <div class="chat-title">
-          友達を検索
-        </div>
-      </header>
-
-      <main class="main-content">
-
-        <div class="search-box">
-          <input
-            id="friend-search-input"
-            type="search"
-            placeholder="友達の名前・クラス"
-            autocomplete="off"
-          >
-        </div>
-
-        <div
-          id="friend-search-results"
-          class="friend-list"
-        ></div>
-
-      </main>
-
-    </div>
-  `;
-
-  document
-    .getElementById("search-back")
-    .addEventListener(
-      "click",
-      showFriends
-    );
-
-  document
-    .getElementById(
-      "friend-search-input"
-    )
-    .addEventListener(
-      "input",
-      renderFriendSearch
-    );
-
-  renderFriendSearch();
-}
-
-function renderFriendSearch() {
-  const input =
-    document.getElementById(
-      "friend-search-input"
-    );
-
-  const container =
-    document.getElementById(
-      "friend-search-results"
-    );
-
-  if (!input || !container) {
-    return;
-  }
-
-  const keyword =
-    input.value.trim().toLowerCase();
-
-  const result =
-    friends.filter(friend => {
-      if (!keyword) return true;
-
-      return (
-        friend.name
-          .toLowerCase()
-          .includes(keyword) ||
-        friend.className
-          .toLowerCase()
-          .includes(keyword)
+socket.on(
+  "connect",
+  () => {
+    if (me?.id) {
+      socket.emit(
+        "identify",
+        me.id
       );
-    });
-
-  container.innerHTML =
-    result.length
-      ? result
-          .map(friendCard)
-          .join("")
-      : `
-        <div class="empty-state">
-          見つかりません
-        </div>
-      `;
-
-  container
-    .querySelectorAll(".friend-card")
-    .forEach(card => {
-      card.addEventListener(
-        "click",
-        () => {
-          const user =
-            friends.find(
-              friend =>
-                friend.id ===
-                card.dataset.id
-            );
-
-          if (user) {
-            openChat(user);
-          }
-        }
-      );
-    });
-}
-
-/* =========================
-   ナビゲーション
-========================= */
-
-function bottomNavigation(active) {
-  return `
-    <nav class="bottom-nav">
-
-      <button
-        class="nav-item ${
-          active === "friends"
-            ? "active"
-            : ""
-        }"
-        id="nav-friends"
-      >
-        <span>👥</span>
-        <small>友達</small>
-      </button>
-
-      <button
-        class="nav-item"
-        id="nav-add"
-      >
-        <span>＋</span>
-        <small>追加</small>
-      </button>
-
-      <button
-        class="nav-item ${
-          active === "profile"
-            ? "active"
-            : ""
-        }"
-        id="nav-profile"
-      >
-        <span>◉</span>
-        <small>設定</small>
-      </button>
-
-    </nav>
-  `;
-}
-
-document.addEventListener(
-  "click",
-  event => {
-    if (
-      event.target.closest(
-        "#nav-friends"
-      )
-    ) {
-      showFriends();
-    }
-
-    if (
-      event.target.closest(
-        "#nav-add"
-      )
-    ) {
-      showAddFriendScreen();
-    }
-
-    if (
-      event.target.closest(
-        "#nav-profile"
-      )
-    ) {
-      showProfile();
     }
   }
 );
 
-/* =========================
-   画面遷移
-========================= */
+socket.on(
+  "message",
+  message => {
+    /*
+      今開いているチャット
+    */
+    if (
+      currentChatUser &&
+      (
+        (
+          message.from ===
+            me.id &&
+          message.to ===
+            currentChatUser.id
+        ) ||
+        (
+          message.to ===
+            me.id &&
+          message.from ===
+            currentChatUser.id
+        )
+      )
+    ) {
+      currentMessages.push(
+        message
+      );
 
-async function showFriends() {
-  currentScreen = "friends";
-  currentChatUser = null;
-  replyTarget = null;
+      renderMessages();
 
-  await loadFriends();
-  await loadFriendRequests();
+      if (
+        message.to ===
+        me.id
+      ) {
+        markCurrentChatRead();
+      }
 
-  renderFriendsScreen();
-}
+      return;
+    }
 
-/* =========================
-   ユーザー情報更新
-========================= */
+    /*
+      閉じているチャットなら
+      友達一覧を更新
+    */
+    loadFriends()
+      .then(() => {
+        if (
+          currentPage ===
+          "friends"
+        ) {
+          renderFriendsPage();
+        }
+      });
 
-function updateCachedUser(user) {
-  users = users.map(
-    item =>
-      item.id === user.id
-        ? {
-            ...item,
-            ...user
-          }
-        : item
-  );
-
-  friends = friends.map(
-    item =>
-      item.id === user.id
-        ? {
-            ...item,
-            ...user
-          }
-        : item
-  );
-}
-
-function updateUserPresence(data) {
-  updateCachedUser({
-    id: data.userId,
-    online: data.online,
-    lastOnline: data.lastOnline
-  });
-
-  if (
-    currentChatUser?.id ===
-    data.userId
-  ) {
-    currentChatUser = {
-      ...currentChatUser,
-      online: data.online,
-      lastOnline: data.lastOnline
-    };
-
-    renderChatHeader();
+    if (
+      message.to ===
+      me.id
+    ) {
+      showToast(
+        "新しいメッセージがあります"
+      );
+    }
   }
+);
 
-  renderFriends();
-}
+socket.on(
+  "new-message-notification",
+  data => {
+    if (
+      data?.message?.from ===
+      me?.id
+    ) {
+      return;
+    }
 
-/* =========================
+    const sender =
+      data?.from?.name ||
+      "新しいメッセージ";
+
+    showBrowserNotification(
+      sender,
+      data?.message?.text ||
+        "新しいメッセージがあります"
+    );
+  }
+);
+
+socket.on(
+  "reply-notification",
+  data => {
+    showToast(
+      `${data.from}があなたのメッセージに返信しました`
+    );
+  }
+);
+
+socket.on(
+  "messages-read",
+  async data => {
+    if (
+      currentChatUser &&
+      data?.otherUserId ===
+        currentChatUser.id
+    ) {
+      currentMessages =
+        await api(
+          `/api/messages/${me.id}/${currentChatUser.id}`
+        );
+
+      renderMessages();
+    }
+  }
+);
+
+socket.on(
+  "presence",
+  async data => {
+    if (
+      currentChatUser &&
+      data.userId ===
+        currentChatUser.id
+    ) {
+      currentChatUser.online =
+        data.online;
+
+      const presence =
+        document.getElementById(
+          "chat-presence"
+        );
+
+      if (presence) {
+        presence.textContent =
+          data.online
+            ? "オンライン"
+            : "オフライン";
+      }
+    }
+
+    if (
+      currentPage ===
+      "friends"
+    ) {
+      await loadFriends();
+
+      renderFriendsPage();
+    }
+  }
+);
+
+socket.on(
+  "friend-request",
+  async data => {
+    await loadRequests();
+
+    showToast(
+      `${data?.fromUser?.name || "誰か"}から友達申請が届きました`
+    );
+
+    showBrowserNotification(
+      "友達申請",
+      `${data?.fromUser?.name || "誰か"}から友達申請が届きました`
+    );
+
+    if (
+      currentPage ===
+      "requests"
+    ) {
+      renderRequestsPage();
+    }
+
+    if (
+      currentPage ===
+      "friends"
+    ) {
+      renderFriendsPage();
+    }
+  }
+);
+
+socket.on(
+  "friend-added",
+  async data => {
+    await loadFriends();
+
+    showToast(
+      `${data?.user?.name || "ユーザー"}と友達になりました`
+    );
+
+    if (
+      currentPage ===
+      "friends"
+    ) {
+      renderFriendsPage();
+    }
+
+    if (
+      currentPage ===
+      "search"
+    ) {
+      await loadUsers();
+
+      const input =
+        document.getElementById(
+          "user-search"
+        );
+
+      renderUserSearchResults(
+        input?.value || ""
+      );
+    }
+  }
+);
+
+socket.on(
+  "friend-removed",
+  async () => {
+    await loadFriends();
+
+    if (
+      currentPage ===
+      "friends"
+    ) {
+      renderFriendsPage();
+    }
+  }
+);
+
+socket.on(
+  "favorite-updated",
+  async () => {
+    await loadFriends();
+
+    if (
+      currentPage ===
+      "friends"
+    ) {
+      renderFriendsPage();
+    }
+  }
+);
+
+socket.on(
+  "message-deleted",
+  async data => {
+    if (
+      !currentChatUser
+    ) {
+      return;
+    }
+
+    currentMessages =
+      await api(
+        `/api/messages/${me.id}/${currentChatUser.id}`
+      );
+
+    renderMessages();
+  }
+);
+
+socket.on(
+  "user-updated",
+  async user => {
+    if (!user) return;
+
+    if (
+      user.id === me.id
+    ) {
+      me = user;
+
+      saveMe();
+    }
+
+    const friend =
+      friends.find(
+        item =>
+          item.id ===
+          user.id
+      );
+
+    if (friend) {
+      Object.assign(
+        friend,
+        user
+      );
+    }
+
+    if (
+      currentChatUser &&
+      currentChatUser.id ===
+        user.id
+    ) {
+      Object.assign(
+        currentChatUser,
+        user
+      );
+
+      renderChat();
+    }
+
+    if (
+      currentPage ===
+      "friends"
+    ) {
+      renderFriendsPage();
+    }
+  }
+);
+
+/* ==================================================
    通知
-========================= */
+================================================== */
 
 async function requestNotificationPermission() {
   if (
@@ -2440,14 +2585,52 @@ async function requestNotificationPermission() {
   ) {
     try {
       await Notification.requestPermission();
-    } catch {}
+    } catch {
+      // 無視
+    }
   }
 }
 
-requestNotificationPermission();
+function showBrowserNotification(
+  title,
+  body
+) {
+  if (
+    !("Notification" in window)
+  ) {
+    return;
+  }
 
-/* =========================
-   起動
-========================= */
+  if (
+    Notification.permission !==
+    "granted"
+  ) {
+    return;
+  }
+
+  if (
+    document.visibilityState ===
+    "visible"
+  ) {
+    return;
+  }
+
+  try {
+    new Notification(
+      title,
+      {
+        body,
+        icon:
+          "/icon-192.png"
+      }
+    );
+  } catch {
+    // 無視
+  }
+}
+
+/* ==================================================
+   開始
+================================================== */
 
 init();
