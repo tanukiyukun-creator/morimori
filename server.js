@@ -6,178 +6,798 @@ const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
 
-const PORT = Number(process.env.PORT) || 10000;
-const HOST = "0.0.0.0";
+const PORT = process.env.PORT || 3000;
 
-app.use(express.json({ limit: "1mb" }));
-app.use(express.static(path.join(__dirname, "public")));
+
+/*
+ * =========================
+ * Express
+ * =========================
+ */
+
+app.use(express.json({ limit: "10mb" }));
+
+app.use(
+  express.static(
+    path.join(__dirname, "public")
+  )
+);
+
+
+/*
+ * =========================
+ * Socket.IO
+ * =========================
+ */
+
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+
+/*
+ * =========================
+ * データ
+ *
+ * 現在はMVPなのでメモリ保存。
+ * Renderを再起動すると消える。
+ * 後でデータベースへ変更する。
+ * =========================
+ */
 
 const users = new Map();
 const messages = new Map();
-const sockets = new Map();
 
-const makeId = () => crypto.randomUUID();
 
-function roomFor(a, b) {
-  return [a, b].sort().join(":");
+// userId -> Set(socketId)
+const userSockets = new Map();
+
+
+/*
+ * =========================
+ * 共通関数
+ * =========================
+ */
+
+function createId() {
+  return crypto.randomUUID();
 }
+
+
+function getUser(userId) {
+  return users.get(userId) || null;
+}
+
+
+function getUserSockets(userId) {
+  return userSockets.get(userId) || new Set();
+}
+
+
+function isOnline(userId) {
+  const sockets = userSockets.get(userId);
+
+  return !!sockets && sockets.size > 0;
+}
+
 
 function publicUser(user) {
   return {
     id: user.id,
     name: user.name,
     className: user.className,
-    icon: user.icon || "",
-    online: sockets.has(user.id),
+    icon: user.icon || null,
+    online: isOnline(user.id),
     lastOnline: user.lastOnline || null
   };
 }
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "morimori" });
-});
 
-app.get("/api/users", (_req, res) => {
-  res.json([...users.values()].map(publicUser));
-});
+function conversationKey(userA, userB) {
+  return [userA, userB]
+    .sort()
+    .join(":");
+}
 
-app.post("/api/users", (req, res) => {
-  const name = String(req.body?.name || "").trim();
-  const className = String(req.body?.className || "").trim();
 
-  if (!name || !className) {
-    return res.status(400).json({ error: "名前とクラスを入力してください。" });
+function getConversation(userA, userB) {
+  const key = conversationKey(userA, userB);
+
+  if (!messages.has(key)) {
+    messages.set(key, []);
   }
 
+  return messages.get(key);
+}
+
+
+function emitToUser(userId, event, data) {
+  const sockets = getUserSockets(userId);
+
+  for (const socketId of sockets) {
+    io.to(socketId).emit(event, data);
+  }
+}
+
+
+/*
+ * =========================
+ * API
+ * =========================
+ */
+
+
+/*
+ * ヘルスチェック
+ */
+
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    app: "morimori"
+  });
+});
+
+
+/*
+ * ユーザー一覧
+ */
+
+app.get("/api/users", (req, res) => {
+
+  const result = [];
+
+  for (const user of users.values()) {
+    result.push(
+      publicUser(user)
+    );
+  }
+
+  res.json(result);
+});
+
+
+/*
+ * ユーザー登録
+ */
+
+app.post("/api/users", (req, res) => {
+
+  const name =
+    typeof req.body?.name === "string"
+      ? req.body.name.trim()
+      : "";
+
+  const className =
+    typeof req.body?.className === "string"
+      ? req.body.className.trim()
+      : "";
+
+  if (!name || !className) {
+    return res.status(400).json({
+      error: "名前とクラスを入力してください。"
+    });
+  }
+
+
+  if (name.length > 40) {
+    return res.status(400).json({
+      error: "名前は40文字以内にしてください。"
+    });
+  }
+
+
+  if (className.length > 30) {
+    return res.status(400).json({
+      error: "クラスは30文字以内にしてください。"
+    });
+  }
+
+
   const user = {
-    id: makeId(),
-    name: name.slice(0, 40),
-    className: className.slice(0, 30),
-    icon: "",
+    id: createId(),
+    name,
+    className,
+    icon: null,
     createdAt: Date.now(),
     lastOnline: null
   };
 
-  users.set(user.id, user);
-  res.json(publicUser(user));
+
+  users.set(
+    user.id,
+    user
+  );
+
+
+  res.status(201).json(
+    publicUser(user)
+  );
 });
 
-app.get("/api/messages/:a/:b", (req, res) => {
-  const room = roomFor(req.params.a, req.params.b);
-  res.json(messages.get(room) || []);
-});
 
-io.on("connection", (socket) => {
-  socket.on("identify", (userId) => {
-    const user = users.get(userId);
-    if (!user) return;
+/*
+ * ユーザー情報
+ */
 
-    sockets.set(userId, socket.id);
-    socket.data.userId = userId;
+app.get("/api/users/:userId", (req, res) => {
 
-    io.emit("presence", {
-      userId,
-      online: true,
-      lastOnline: null
+  const user =
+    getUser(req.params.userId);
+
+  if (!user) {
+    return res.status(404).json({
+      error: "ユーザーが見つかりません。"
     });
-  });
+  }
 
-  socket.on("send-message", (payload) => {
-    const from = users.get(socket.data.userId);
-    const to = users.get(String(payload?.to || ""));
-    if (!from || !to || from.id === to.id) return;
+  res.json(
+    publicUser(user)
+  );
+});
 
-    const text = String(payload?.text || "").trim();
-    if (!text) return;
 
-    let replyTo = null;
-    if (payload?.replyTo) {
-      replyTo = String(payload.replyTo);
+/*
+ * 1対1メッセージ取得
+ */
+
+app.get(
+  "/api/messages/:userId/:otherUserId",
+  (req, res) => {
+
+    const userId =
+      req.params.userId;
+
+    const otherUserId =
+      req.params.otherUserId;
+
+
+    if (!getUser(userId)) {
+      return res.status(404).json({
+        error: "ユーザーが見つかりません。"
+      });
     }
 
-    const message = {
-      id: makeId(),
-      roomId: roomFor(from.id, to.id),
-      from: from.id,
-      to: to.id,
-      text: text.slice(0, 5000),
-      replyTo,
-      createdAt: Date.now(),
-      read: false
-    };
 
-    const room = message.roomId;
-    if (!messages.has(room)) messages.set(room, []);
-    messages.get(room).push(message);
+    if (!getUser(otherUserId)) {
+      return res.status(404).json({
+        error: "相手のユーザーが見つかりません。"
+      });
+    }
 
-    io.to(socket.id).emit("message", message);
 
-    const targetSocket = sockets.get(to.id);
-    if (targetSocket) {
-      io.to(targetSocket).emit("message", message);
+    const conversation =
+      getConversation(
+        userId,
+        otherUserId
+      );
 
-      if (replyTo) {
-        io.to(targetSocket).emit("reply-notification", {
-          from: from.name,
-          messageId: message.id,
-          replyTo
-        });
+
+    res.json(conversation);
+  }
+);
+
+
+/*
+ * =========================
+ * Socket.IO
+ * =========================
+ */
+
+io.on("connection", socket => {
+
+  /*
+   * ユーザー識別
+   */
+
+  socket.on(
+    "identify",
+    userId => {
+
+      if (
+        typeof userId !== "string" ||
+        !users.has(userId)
+      ) {
+        return;
       }
-    }
-  });
 
-  socket.on("mark-read", ({ otherUserId }) => {
-    const me = users.get(socket.data.userId);
-    const other = users.get(String(otherUserId || ""));
-    if (!me || !other) return;
 
-    const room = roomFor(me.id, other.id);
-    const list = messages.get(room) || [];
-    let changed = false;
+      /*
+       * 以前のユーザー情報を解除
+       */
 
-    for (const message of list) {
-      if (message.to === me.id && !message.read) {
-        message.read = true;
-        changed = true;
+      if (socket.data.userId) {
+
+        removeSocketFromUser(
+          socket,
+          socket.data.userId
+        );
+
       }
-    }
 
-    if (changed) {
-      io.to(socket.id).emit("messages-read", { otherUserId: other.id });
-      const otherSocket = sockets.get(other.id);
-      if (otherSocket) {
-        io.to(otherSocket).emit("messages-read", { otherUserId: me.id });
+
+      socket.data.userId =
+        userId;
+
+
+      /*
+       * Socketをユーザーに登録
+       */
+
+      if (!userSockets.has(userId)) {
+        userSockets.set(
+          userId,
+          new Set()
+        );
       }
-    }
-  });
 
-  socket.on("disconnect", () => {
-    const userId = socket.data.userId;
-    if (!userId) return;
 
-    if (sockets.get(userId) === socket.id) {
-      sockets.delete(userId);
-      const user = users.get(userId);
-      if (user) user.lastOnline = Date.now();
+      userSockets
+        .get(userId)
+        .add(socket.id);
+
+
+      const user =
+        getUser(userId);
+
+
+      if (user) {
+        user.lastOnline = null;
+      }
+
+
+      /*
+       * オンライン状態を全員へ通知
+       */
 
       io.emit("presence", {
         userId,
-        online: false,
-        lastOnline: user?.lastOnline || Date.now()
+        online: true,
+        lastOnline: null
       });
+
     }
-  });
+  );
+
+
+  /*
+   * メッセージ送信
+   */
+
+  socket.on(
+    "send-message",
+    data => {
+
+      const from =
+        socket.data.userId;
+
+      if (!from) {
+        return;
+      }
+
+
+      const to =
+        typeof data?.to === "string"
+          ? data.to
+          : "";
+
+
+      const text =
+        typeof data?.text === "string"
+          ? data.text.trim()
+          : "";
+
+
+      const replyTo =
+        typeof data?.replyTo === "string"
+          ? data.replyTo
+          : null;
+
+
+      /*
+       * 基本チェック
+       */
+
+      if (!to || !text) {
+        return;
+      }
+
+
+      if (text.length > 10000) {
+        return;
+      }
+
+
+      if (!users.has(from)) {
+        return;
+      }
+
+
+      if (!users.has(to)) {
+        return;
+      }
+
+
+      if (from === to) {
+        return;
+      }
+
+
+      /*
+       * 返信先確認
+       */
+
+      let validReplyTo = null;
+
+      if (replyTo) {
+
+        const conversation =
+          getConversation(
+            from,
+            to
+          );
+
+
+        const original =
+          conversation.find(
+            message =>
+              message.id === replyTo
+          );
+
+
+        if (original) {
+          validReplyTo = replyTo;
+        }
+
+      }
+
+
+      /*
+       * メッセージ作成
+       */
+
+      const message = {
+
+        id: createId(),
+
+        from,
+
+        to,
+
+        text,
+
+        replyTo:
+          validReplyTo,
+
+        createdAt:
+          Date.now(),
+
+        read: false
+
+      };
+
+
+      /*
+       * 保存
+       */
+
+      const conversation =
+        getConversation(
+          from,
+          to
+        );
+
+
+      conversation.push(
+        message
+      );
+
+
+      /*
+       * 送信者へ
+       */
+
+      emitToUser(
+        from,
+        "message",
+        message
+      );
+
+
+      /*
+       * 受信者へ
+       */
+
+      emitToUser(
+        to,
+        "message",
+        message
+      );
+
+
+      /*
+       * 返信通知
+       */
+
+      if (validReplyTo) {
+
+        const original =
+          conversation.find(
+            item =>
+              item.id ===
+              validReplyTo
+          );
+
+
+        if (
+          original &&
+          original.from !== from
+        ) {
+
+          const sender =
+            getUser(from);
+
+
+          emitToUser(
+            original.from,
+            "reply-notification",
+            {
+              from:
+                sender?.name ||
+                "ユーザー",
+
+              messageId:
+                message.id,
+
+              replyTo:
+                validReplyTo
+            }
+          );
+
+        }
+
+      }
+
+    }
+  );
+
+
+  /*
+   * 既読
+   */
+
+  socket.on(
+    "mark-read",
+    data => {
+
+      const userId =
+        socket.data.userId;
+
+      if (!userId) {
+        return;
+      }
+
+
+      const otherUserId =
+        typeof data?.otherUserId === "string"
+          ? data.otherUserId
+          : "";
+
+
+      if (!otherUserId) {
+        return;
+      }
+
+
+      const conversation =
+        getConversation(
+          userId,
+          otherUserId
+        );
+
+
+      let changed = false;
+
+
+      /*
+       * 自分宛ての未読を既読にする
+       */
+
+      for (const message of conversation) {
+
+        if (
+          message.to === userId &&
+          message.from === otherUserId &&
+          !message.read
+        ) {
+
+          message.read = true;
+
+          changed = true;
+        }
+
+      }
+
+
+      if (!changed) {
+        return;
+      }
+
+
+      /*
+       * 相手側へ既読通知
+       *
+       * 相手から見ると
+       * otherUserId = 自分
+       */
+
+      emitToUser(
+        otherUserId,
+        "messages-read",
+        {
+          otherUserId: userId
+        }
+      );
+
+
+      /*
+       * 自分側にも反映
+       */
+
+      emitToUser(
+        userId,
+        "messages-read",
+        {
+          otherUserId
+        }
+      );
+
+    }
+  );
+
+
+  /*
+   * 切断
+   */
+
+  socket.on(
+    "disconnect",
+    () => {
+
+      const userId =
+        socket.data.userId;
+
+
+      if (!userId) {
+        return;
+      }
+
+
+      removeSocketFromUser(
+        socket,
+        userId
+      );
+
+    }
+  );
+
 });
 
-app.get("*", (req, res, next) => {
-  if (req.path.startsWith("/socket.io/") || req.path.startsWith("/api/")) {
-    return next();
+
+/*
+ * =========================
+ * Socket解除
+ * =========================
+ */
+
+function removeSocketFromUser(
+  socket,
+  userId
+) {
+
+  const sockets =
+    userSockets.get(userId);
+
+
+  if (!sockets) {
+    return;
   }
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
 
-server.listen(PORT, HOST, () => {
-  console.log(`morimori listening on http://${HOST}:${PORT}`);
-});
+
+  sockets.delete(
+    socket.id
+  );
+
+
+  /*
+   * まだ別端末・別タブが
+   * 接続している場合は
+   * オフラインにしない
+   */
+
+  if (sockets.size > 0) {
+    return;
+  }
+
+
+  userSockets.delete(
+    userId
+  );
+
+
+  const user =
+    getUser(userId);
+
+
+  const lastOnline =
+    Date.now();
+
+
+  if (user) {
+    user.lastOnline =
+      lastOnline;
+  }
+
+
+  /*
+   * オフライン通知
+   */
+
+  io.emit(
+    "presence",
+    {
+      userId,
+      online: false,
+      lastOnline
+    }
+  );
+
+}
+
+
+/*
+ * =========================
+ * SPA fallback
+ *
+ * Express 5では "*" ではなく
+ * "/{*splat}" を使用する。
+ * =========================
+ */
+
+app.get(
+  "/{*splat}",
+  (req, res) => {
+
+    res.sendFile(
+      path.join(
+        __dirname,
+        "public",
+        "index.html"
+      )
+    );
+
+  }
+);
+
+
+/*
+ * =========================
+ * 起動
+ * =========================
+ */
+
+server.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+
+    console.log(
+      `morimori server running on port ${PORT}`
+    );
+
+  }
+);
