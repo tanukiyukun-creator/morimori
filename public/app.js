@@ -15,8 +15,28 @@ let currentMessages = [];
 let replyTarget = null;
 
 let currentPage = "friends";
-
 let searchTimer = null;
+
+/* ==================================================
+   WebRTC
+================================================== */
+
+let peerConnection = null;
+let localStream = null;
+let currentCall = null;
+let pendingIceCandidates = [];
+let callBusy = false;
+
+const RTC_CONFIG = {
+  iceServers: [
+    {
+      urls: "stun:stun.l.google.com:19302"
+    },
+    {
+      urls: "stun:stun1.l.google.com:19302"
+    }
+  ]
+};
 
 /* ==================================================
    共通
@@ -35,7 +55,6 @@ function formatTime(timestamp) {
   if (!timestamp) return "";
 
   const date = new Date(timestamp);
-
   const now = new Date();
 
   if (
@@ -43,28 +62,20 @@ function formatTime(timestamp) {
     date.getMonth() === now.getMonth() &&
     date.getDate() === now.getDate()
   ) {
-    return date.toLocaleTimeString(
-      "ja-JP",
-      {
-        hour: "2-digit",
-        minute: "2-digit"
-      }
-    );
+    return date.toLocaleTimeString("ja-JP", {
+      hour: "2-digit",
+      minute: "2-digit"
+    });
   }
 
-  return date.toLocaleDateString(
-    "ja-JP",
-    {
-      month: "numeric",
-      day: "numeric"
-    }
-  );
+  return date.toLocaleDateString("ja-JP", {
+    month: "numeric",
+    day: "numeric"
+  });
 }
 
 function avatarHtml(user, large = false) {
-  const sizeClass = large
-    ? " large"
-    : "";
+  const sizeClass = large ? " large" : "";
 
   if (user?.icon) {
     return `
@@ -86,55 +97,37 @@ function avatarHtml(user, large = false) {
 }
 
 function showToast(message) {
-  let toast =
-    document.querySelector(".toast");
+  let toast = document.querySelector(".toast");
 
   if (!toast) {
-    toast =
-      document.createElement("div");
-
+    toast = document.createElement("div");
     toast.className = "toast";
-
-    document.body.appendChild(
-      toast
-    );
+    document.body.appendChild(toast);
   }
 
   toast.textContent = message;
-
   toast.classList.add("show");
 
-  clearTimeout(
-    toast._timer
-  );
+  clearTimeout(toast._timer);
 
-  toast._timer =
-    setTimeout(() => {
-      toast.classList.remove(
-        "show"
-      );
-    }, 2400);
+  toast._timer = setTimeout(() => {
+    toast.classList.remove("show");
+  }, 2400);
 }
 
-async function api(
-  url,
-  options = {}
-) {
-  const response =
-    await fetch(url, {
-      headers: {
-        "Content-Type":
-          "application/json",
-        ...(options.headers || {})
-      },
-      ...options
-    });
+async function api(url, options = {}) {
+  const response = await fetch(url, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    },
+    ...options
+  });
 
   let data = null;
 
   try {
-    data =
-      await response.json();
+    data = await response.json();
   } catch {
     data = null;
   }
@@ -154,10 +147,10 @@ async function api(
 ================================================== */
 
 async function init() {
+  injectCallStyles();
+
   const saved =
-    localStorage.getItem(
-      STORAGE_KEY
-    );
+    localStorage.getItem(STORAGE_KEY);
 
   if (!saved) {
     renderSetup();
@@ -167,28 +160,19 @@ async function init() {
   try {
     me = JSON.parse(saved);
   } catch {
-    localStorage.removeItem(
-      STORAGE_KEY
-    );
-
+    localStorage.removeItem(STORAGE_KEY);
     renderSetup();
     return;
   }
 
   try {
     const fresh =
-      await api(
-        `/api/users/${me.id}`
-      );
+      await api(`/api/users/${me.id}`);
 
     me = fresh;
-
     saveMe();
 
-    socket.emit(
-      "identify",
-      me.id
-    );
+    socket.emit("identify", me.id);
 
     await loadFriends();
     await loadRequests();
@@ -197,10 +181,7 @@ async function init() {
 
     requestNotificationPermission();
   } catch {
-    localStorage.removeItem(
-      STORAGE_KEY
-    );
-
+    localStorage.removeItem(STORAGE_KEY);
     renderSetup();
   }
 }
@@ -283,16 +264,12 @@ async function createAccount(event) {
 
   const name =
     document
-      .getElementById(
-        "setup-name"
-      )
+      .getElementById("setup-name")
       .value.trim();
 
   const className =
     document
-      .getElementById(
-        "setup-class"
-      )
+      .getElementById("setup-class")
       .value.trim();
 
   if (!name || !className) {
@@ -301,16 +278,13 @@ async function createAccount(event) {
 
   try {
     const user =
-      await api(
-        "/api/users",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            name,
-            className
-          })
-        }
-      );
+      await api("/api/users", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          className
+        })
+      });
 
     me = user;
 
@@ -328,9 +302,7 @@ async function createAccount(event) {
 
     requestNotificationPermission();
   } catch (error) {
-    showToast(
-      error.message
-    );
+    showToast(error.message);
   }
 }
 
@@ -342,9 +314,7 @@ async function loadFriends() {
   if (!me) return;
 
   friends =
-    await api(
-      `/api/friends/${me.id}`
-    );
+    await api(`/api/friends/${me.id}`);
 }
 
 async function loadRequests() {
@@ -364,9 +334,7 @@ async function loadRequests() {
 
 async function loadUsers() {
   allUsers =
-    await api(
-      "/api/users"
-    );
+    await api("/api/users");
 }
 
 /* ==================================================
@@ -431,9 +399,7 @@ function renderNavigation() {
 
 function bindNavigation() {
   document
-    .querySelectorAll(
-      ".nav-item"
-    )
+    .querySelectorAll(".nav-item")
     .forEach(button => {
       button.addEventListener(
         "click",
@@ -443,30 +409,22 @@ function bindNavigation() {
 
           currentPage = page;
 
-          if (
-            page === "friends"
-          ) {
+          if (page === "friends") {
             await loadFriends();
             renderFriendsPage();
           }
 
-          if (
-            page === "search"
-          ) {
+          if (page === "search") {
             await loadUsers();
             renderSearchPage();
           }
 
-          if (
-            page === "requests"
-          ) {
+          if (page === "requests") {
             await loadRequests();
             renderRequestsPage();
           }
 
-          if (
-            page === "profile"
-          ) {
+          if (page === "profile") {
             renderProfilePage();
           }
         }
@@ -479,8 +437,7 @@ function bindNavigation() {
 ================================================== */
 
 function renderFriendsPage() {
-  currentPage =
-    "friends";
+  currentPage = "friends";
 
   app.innerHTML = `
     <div class="app-shell">
@@ -585,50 +542,38 @@ function renderFriendsPage() {
   `;
 
   document
-    .getElementById(
-      "add-friend"
-    )
+    .getElementById("add-friend")
     .addEventListener(
       "click",
-      () => {
-        currentPage =
-          "search";
-
+      async () => {
+        currentPage = "search";
+        await loadUsers();
         renderSearchPage();
       }
     );
 
   document
-    .getElementById(
-      "open-requests"
-    )
+    .getElementById("open-requests")
     .addEventListener(
       "click",
       async () => {
-        currentPage =
-          "requests";
-
+        currentPage = "requests";
         await loadRequests();
-
         renderRequestsPage();
       }
     );
 
   document
-    .getElementById(
-      "refresh-friends"
-    )
+    .getElementById("refresh-friends")
     .addEventListener(
       "click",
       async () => {
         await loadFriends();
-
         renderFriendsPage();
       }
     );
 
   renderFriendLists();
-
   bindNavigation();
 }
 
@@ -648,14 +593,11 @@ function renderFriendLists() {
       "normal-list"
     );
 
-  if (!favoriteList) {
-    return;
-  }
+  if (!favoriteList) return;
 
   const favorites =
     friends.filter(
-      friend =>
-        friend.favorite
+      friend => friend.favorite
     );
 
   const recent =
@@ -681,9 +623,7 @@ function renderFriendLists() {
   favoriteList.innerHTML =
     favorites.length
       ? favorites
-          .map(
-            friendCardHtml
-          )
+          .map(friendCardHtml)
           .join("")
       : emptyMiniHtml(
           "お気に入りはありません"
@@ -692,9 +632,7 @@ function renderFriendLists() {
   recentList.innerHTML =
     recent.length
       ? recent
-          .map(
-            friendCardHtml
-          )
+          .map(friendCardHtml)
           .join("")
       : emptyMiniHtml(
           "最近のやりとりはありません"
@@ -703,9 +641,7 @@ function renderFriendLists() {
   normalList.innerHTML =
     normal.length
       ? normal
-          .map(
-            friendCardHtml
-          )
+          .map(friendCardHtml)
           .join("")
       : emptyMiniHtml(
           "友達を追加してみよう"
@@ -736,9 +672,7 @@ function friendCardHtml(friend) {
         <div class="friend-name-row">
 
           <span class="friend-name">
-            ${escapeHtml(
-              friend.name
-            )}
+            ${escapeHtml(friend.name)}
           </span>
 
           ${
@@ -756,15 +690,15 @@ function friendCardHtml(friend) {
         </div>
 
         <div class="friend-class">
-          ${escapeHtml(
-            friend.className
-          )}
+          ${escapeHtml(friend.className)}
 
           ${
             friend.lastMessageText
               ? ` · ${escapeHtml(
-                  friend.lastMessageText
-                    .slice(0, 25)
+                  friend.lastMessageText.slice(
+                    0,
+                    25
+                  )
                 )}`
               : ""
           }
@@ -804,9 +738,7 @@ function friendCardHtml(friend) {
 
 function bindFriendCards() {
   document
-    .querySelectorAll(
-      ".friend-card"
-    )
+    .querySelectorAll(".friend-card")
     .forEach(card => {
       card.addEventListener(
         "click",
@@ -833,8 +765,7 @@ function bindFriendCards() {
 ================================================== */
 
 function renderSearchPage() {
-  currentPage =
-    "search";
+  currentPage = "search";
 
   app.innerHTML = `
     <div class="app-shell">
@@ -886,9 +817,7 @@ function renderSearchPage() {
   input.addEventListener(
     "input",
     () => {
-      clearTimeout(
-        searchTimer
-      );
+      clearTimeout(searchTimer);
 
       searchTimer =
         setTimeout(
@@ -902,24 +831,18 @@ function renderSearchPage() {
     }
   );
 
-  renderUserSearchResults(
-    ""
-  );
+  renderUserSearchResults("");
 
   bindNavigation();
 }
 
-function renderUserSearchResults(
-  keyword
-) {
+function renderUserSearchResults(keyword) {
   const container =
     document.getElementById(
       "user-search-results"
     );
 
-  if (!container) {
-    return;
-  }
+  if (!container) return;
 
   const q =
     keyword
@@ -954,11 +877,8 @@ function renderUserSearchResults(
 
   container.innerHTML =
     users
-      .map(
-        user =>
-          userSearchCardHtml(
-            user
-          )
+      .map(user =>
+        userSearchCardHtml(user)
       )
       .join("");
 
@@ -989,39 +909,37 @@ function userSearchCardHtml(user) {
     outgoingRequests.some(
       request =>
         request.to === user.id &&
-        request.status ===
-          "pending"
+        request.status === "pending"
     );
 
   const pendingIn =
     incomingRequests.some(
       request =>
         request.from === user.id &&
-        request.status ===
-          "pending"
+        request.status === "pending"
     );
 
-  let action =
-    "＋ 追加";
+  let action = "＋ 追加";
 
   if (friend) {
-    action =
-      "✓ 友達";
+    action = "✓ 友達";
   } else if (pendingOut) {
-    action =
-      "申請済み";
+    action = "申請済み";
   } else if (pendingIn) {
-    action =
-      "承認待ち";
+    action = "承認待ち";
   }
 
   return `
     <button
       class="user-search-card"
       data-user-id="${user.id}"
-      ${friend || pendingOut || pendingIn
-        ? "disabled"
-        : ""}
+      ${
+        friend ||
+        pendingOut ||
+        pendingIn
+          ? "disabled"
+          : ""
+      }
     >
 
       ${avatarHtml(user)}
@@ -1029,9 +947,7 @@ function userSearchCardHtml(user) {
       <div class="friend-info">
 
         <div class="friend-name">
-          ${escapeHtml(
-            user.name
-          )}
+          ${escapeHtml(user.name)}
         </div>
 
         <div class="friend-class">
@@ -1050,9 +966,7 @@ function userSearchCardHtml(user) {
   `;
 }
 
-async function sendFriendRequest(
-  userId
-) {
+async function sendFriendRequest(userId) {
   try {
     await api(
       "/api/friend-requests",
@@ -1080,9 +994,7 @@ async function sendFriendRequest(
       input?.value || ""
     );
   } catch (error) {
-    showToast(
-      error.message
-    );
+    showToast(error.message);
   }
 }
 
@@ -1091,8 +1003,7 @@ async function sendFriendRequest(
 ================================================== */
 
 function renderRequestsPage() {
-  currentPage =
-    "requests";
+  currentPage = "requests";
 
   app.innerHTML = `
     <div class="app-shell">
@@ -1105,8 +1016,7 @@ function renderRequestsPage() {
           </div>
 
           <div class="topbar-subtitle">
-            ${incomingRequests.length}
-            件の申請
+            ${incomingRequests.length}件の申請
           </div>
         </div>
 
@@ -1142,7 +1052,6 @@ function renderRequestsPage() {
   `;
 
   renderRequestsLists();
-
   bindNavigation();
 }
 
@@ -1162,9 +1071,7 @@ function renderRequestsLists() {
   incoming.innerHTML =
     incomingRequests.length
       ? incomingRequests
-          .map(
-            incomingRequestHtml
-          )
+          .map(incomingRequestHtml)
           .join("")
       : emptyMiniHtml(
           "新しい申請はありません"
@@ -1173,18 +1080,14 @@ function renderRequestsLists() {
   outgoing.innerHTML =
     outgoingRequests.length
       ? outgoingRequests
-          .map(
-            outgoingRequestHtml
-          )
+          .map(outgoingRequestHtml)
           .join("")
       : emptyMiniHtml(
           "送信した申請はありません"
         );
 
   incoming
-    .querySelectorAll(
-      "[data-action]"
-    )
+    .querySelectorAll("[data-action]")
     .forEach(button => {
       button.addEventListener(
         "click",
@@ -1198,9 +1101,7 @@ function renderRequestsLists() {
     });
 }
 
-function incomingRequestHtml(
-  request
-) {
+function incomingRequestHtml(request) {
   const user =
     request.fromUser;
 
@@ -1212,15 +1113,11 @@ function incomingRequestHtml(
       <div class="friend-info">
 
         <div class="friend-name">
-          ${escapeHtml(
-            user.name
-          )}
+          ${escapeHtml(user.name)}
         </div>
 
         <div class="friend-class">
-          ${escapeHtml(
-            user.className
-          )}
+          ${escapeHtml(user.className)}
         </div>
 
       </div>
@@ -1249,9 +1146,7 @@ function incomingRequestHtml(
   `;
 }
 
-function outgoingRequestHtml(
-  request
-) {
+function outgoingRequestHtml(request) {
   const user =
     request.toUser;
 
@@ -1263,15 +1158,11 @@ function outgoingRequestHtml(
       <div class="friend-info">
 
         <div class="friend-name">
-          ${escapeHtml(
-            user.name
-          )}
+          ${escapeHtml(user.name)}
         </div>
 
         <div class="friend-class">
-          ${escapeHtml(
-            user.className
-          )}
+          ${escapeHtml(user.className)}
         </div>
 
       </div>
@@ -1307,9 +1198,7 @@ async function handleRequest(
 
     renderRequestsPage();
   } catch (error) {
-    showToast(
-      error.message
-    );
+    showToast(error.message);
   }
 }
 
@@ -1318,11 +1207,8 @@ async function handleRequest(
 ================================================== */
 
 async function openChat(user) {
-  currentChatUser =
-    user;
-
-  replyTarget =
-    null;
+  currentChatUser = user;
+  replyTarget = null;
 
   try {
     currentMessages =
@@ -1334,19 +1220,14 @@ async function openChat(user) {
   }
 
   renderChat();
-
   markCurrentChatRead();
 }
 
 function renderChat() {
-  if (!currentChatUser) {
-    return;
-  }
+  if (!currentChatUser) return;
 
   app.innerHTML = `
-    <div
-      class="app-shell chat-shell"
-    >
+    <div class="app-shell chat-shell">
 
       <header class="chat-header">
 
@@ -1393,16 +1274,16 @@ function renderChat() {
 
           <button
             class="icon-button"
+            id="audio-call-button"
             title="音声通話"
-            disabled
           >
             ☎
           </button>
 
           <button
             class="icon-button"
+            id="video-call-button"
             title="ビデオ通話"
-            disabled
           >
             ▣
           </button>
@@ -1456,14 +1337,18 @@ function renderChat() {
   renderReplyPreview();
 
   document
-    .getElementById(
-      "chat-back"
-    )
+    .getElementById("chat-back")
     .addEventListener(
       "click",
       async () => {
-        currentChatUser =
-          null;
+        if (currentCall) {
+          showToast(
+            "通話中は先に通話を終了してください"
+          );
+          return;
+        }
+
+        currentChatUser = null;
 
         await loadFriends();
 
@@ -1472,12 +1357,34 @@ function renderChat() {
     );
 
   document
-    .getElementById(
-      "composer"
-    )
+    .getElementById("composer")
     .addEventListener(
       "submit",
       sendCurrentMessage
+    );
+
+  document
+    .getElementById("audio-call-button")
+    .addEventListener(
+      "click",
+      () => {
+        startCall(
+          "audio",
+          currentChatUser
+        );
+      }
+    );
+
+  document
+    .getElementById("video-call-button")
+    .addEventListener(
+      "click",
+      () => {
+        startCall(
+          "video",
+          currentChatUser
+        );
+      }
     );
 
   const input =
@@ -1489,8 +1396,7 @@ function renderChat() {
     "keydown",
     event => {
       if (
-        event.key ===
-          "Enter" &&
+        event.key === "Enter" &&
         !event.shiftKey
       ) {
         if (
@@ -1503,9 +1409,7 @@ function renderChat() {
         event.preventDefault();
 
         document
-          .getElementById(
-            "composer"
-          )
+          .getElementById("composer")
           .requestSubmit();
       }
     }
@@ -1517,9 +1421,7 @@ function renderChat() {
   );
 
   document
-    .getElementById(
-      "plus-button"
-    )
+    .getElementById("plus-button")
     .addEventListener(
       "click",
       () => {
@@ -1530,14 +1432,11 @@ function renderChat() {
     );
 }
 
-function autoResizeTextarea(
-  event
-) {
+function autoResizeTextarea(event) {
   const textarea =
     event.target;
 
-  textarea.style.height =
-    "auto";
+  textarea.style.height = "auto";
 
   textarea.style.height =
     Math.min(
@@ -1552,9 +1451,7 @@ function renderMessages() {
       "messages"
     );
 
-  if (!container) {
-    return;
-  }
+  if (!container) return;
 
   if (!currentMessages.length) {
     container.innerHTML = `
@@ -1583,9 +1480,7 @@ function renderMessages() {
 
   container.innerHTML =
     currentMessages
-      .map(
-        messageHtml
-      )
+      .map(messageHtml)
       .join("");
 
   container
@@ -1606,8 +1501,7 @@ function renderMessages() {
             );
 
           if (message) {
-            replyTarget =
-              message;
+            replyTarget = message;
 
             renderReplyPreview();
 
@@ -1636,17 +1530,13 @@ function renderMessages() {
       );
     });
 
-  requestAnimationFrame(
-    () => {
-      container.scrollTop =
-        container.scrollHeight;
-    }
-  );
+  requestAnimationFrame(() => {
+    container.scrollTop =
+      container.scrollHeight;
+  });
 }
 
-function messageHtml(
-  message
-) {
+function messageHtml(message) {
   const mine =
     message.from === me.id;
 
@@ -1668,9 +1558,7 @@ function messageHtml(
       }"
     >
 
-      <div
-        class="message-bubble"
-      >
+      <div class="message-bubble">
 
         ${
           original
@@ -1732,9 +1620,7 @@ function messageHtml(
           ${
             mine
               ? `
-                <span
-                  class="message-read"
-                >
+                <span class="message-read">
                   ${
                     message.read
                       ? "既読"
@@ -1785,9 +1671,7 @@ function messageHtml(
   `;
 }
 
-async function sendCurrentMessage(
-  event
-) {
+async function sendCurrentMessage(event) {
   event.preventDefault();
 
   const input =
@@ -1800,9 +1684,7 @@ async function sendCurrentMessage(
   const text =
     input.value;
 
-  if (!text.trim()) {
-    return;
-  }
+  if (!text.trim()) return;
 
   socket.emit(
     "send-message",
@@ -1817,12 +1699,9 @@ async function sendCurrentMessage(
   );
 
   input.value = "";
+  input.style.height = "auto";
 
-  input.style.height =
-    "auto";
-
-  replyTarget =
-    null;
+  replyTarget = null;
 
   renderReplyPreview();
 
@@ -1835,14 +1714,10 @@ function renderReplyPreview() {
       "reply-preview-container"
     );
 
-  if (!container) {
-    return;
-  }
+  if (!container) return;
 
   if (!replyTarget) {
-    container.innerHTML =
-      "";
-
+    container.innerHTML = "";
     return;
   }
 
@@ -1884,17 +1759,13 @@ function renderReplyPreview() {
     .addEventListener(
       "click",
       () => {
-        replyTarget =
-          null;
-
+        replyTarget = null;
         renderReplyPreview();
       }
     );
 }
 
-async function deleteMessage(
-  messageId
-) {
+async function deleteMessage(messageId) {
   if (
     !confirm(
       "このメッセージを削除しますか？"
@@ -1911,16 +1782,12 @@ async function deleteMessage(
       }
     );
   } catch (error) {
-    showToast(
-      error.message
-    );
+    showToast(error.message);
   }
 }
 
 function markCurrentChatRead() {
-  if (!currentChatUser) {
-    return;
-  }
+  if (!currentChatUser) return;
 
   socket.emit(
     "mark-read",
@@ -1936,8 +1803,7 @@ function markCurrentChatRead() {
 ================================================== */
 
 function renderProfilePage() {
-  currentPage =
-    "profile";
+  currentPage = "profile";
 
   app.innerHTML = `
     <div class="app-shell">
@@ -1984,9 +1850,7 @@ function renderProfilePage() {
           >
 
           <h2>
-            ${escapeHtml(
-              me.name
-            )}
+            ${escapeHtml(me.name)}
           </h2>
 
           <div class="profile-class">
@@ -2038,9 +1902,7 @@ function renderProfilePage() {
   `;
 
   document
-    .getElementById(
-      "avatar-button"
-    )
+    .getElementById("avatar-button")
     .addEventListener(
       "click",
       () => {
@@ -2053,18 +1915,14 @@ function renderProfilePage() {
     );
 
   document
-    .getElementById(
-      "avatar-input"
-    )
+    .getElementById("avatar-input")
     .addEventListener(
       "change",
       handleAvatar
     );
 
   document
-    .getElementById(
-      "save-profile"
-    )
+    .getElementById("save-profile")
     .addEventListener(
       "click",
       saveProfile
@@ -2073,20 +1931,14 @@ function renderProfilePage() {
   bindNavigation();
 }
 
-function handleAvatar(
-  event
-) {
+function handleAvatar(event) {
   const file =
     event.target.files?.[0];
 
-  if (!file) {
-    return;
-  }
+  if (!file) return;
 
   if (
-    !file.type.startsWith(
-      "image/"
-    )
+    !file.type.startsWith("image/")
   ) {
     showToast(
       "画像を選択してください"
@@ -2104,8 +1956,7 @@ function handleAvatar(
       512
     ).then(
       dataUrl => {
-        me.icon =
-          dataUrl;
+        me.icon = dataUrl;
 
         saveMe();
 
@@ -2118,9 +1969,7 @@ function handleAvatar(
     );
   };
 
-  reader.readAsDataURL(
-    file
-  );
+  reader.readAsDataURL(file);
 }
 
 function resizeImage(
@@ -2138,11 +1987,8 @@ function resizeImage(
             "canvas"
           );
 
-        canvas.width =
-          size;
-
-        canvas.height =
-          size;
+        canvas.width = size;
+        canvas.height = size;
 
         const ctx =
           canvas.getContext(
@@ -2151,29 +1997,21 @@ function resizeImage(
 
         const scale =
           Math.max(
-            size /
-              image.width,
-            size /
-              image.height
+            size / image.width,
+            size / image.height
           );
 
         const width =
-          image.width *
-          scale;
+          image.width * scale;
 
         const height =
-          image.height *
-          scale;
+          image.height * scale;
 
         const x =
-          (size -
-            width) /
-          2;
+          (size - width) / 2;
 
         const y =
-          (size -
-            height) /
-          2;
+          (size - height) / 2;
 
         ctx.drawImage(
           image,
@@ -2191,8 +2029,7 @@ function resizeImage(
         );
       };
 
-      image.src =
-        source;
+      image.src = source;
     }
   );
 }
@@ -2212,6 +2049,13 @@ async function saveProfile() {
       )
       .value.trim();
 
+  if (!name || !className) {
+    showToast(
+      "表示名とクラスを入力してください"
+    );
+    return;
+  }
+
   try {
     const updated =
       await api(
@@ -2221,8 +2065,7 @@ async function saveProfile() {
           body: JSON.stringify({
             name,
             className,
-            icon:
-              me.icon || null
+            icon: me.icon || null
           })
         }
       );
@@ -2239,10 +2082,1213 @@ async function saveProfile() {
 
     renderProfilePage();
   } catch (error) {
+    showToast(error.message);
+  }
+}
+
+/* ==================================================
+   通話
+================================================== */
+
+function injectCallStyles() {
+  if (
+    document.getElementById(
+      "morimori-call-styles"
+    )
+  ) {
+    return;
+  }
+
+  const style =
+    document.createElement("style");
+
+  style.id =
+    "morimori-call-styles";
+
+  style.textContent = `
+    .call-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      background: rgba(4, 6, 9, .96);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .call-card {
+      width: min(440px, 100%);
+      background: #101419;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 28px;
+      padding: 30px;
+      box-shadow: 0 30px 100px rgba(0,0,0,.55);
+      text-align: center;
+    }
+
+    .call-card .avatar.large {
+      width: 96px;
+      height: 96px;
+      margin: 0 auto 18px;
+    }
+
+    .call-name {
+      font-size: 22px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .call-status {
+      margin-top: 8px;
+      color: #8e9aa8;
+      font-size: 14px;
+    }
+
+    .call-actions {
+      display: flex;
+      justify-content: center;
+      gap: 22px;
+      margin-top: 30px;
+    }
+
+    .call-action {
+      width: 62px;
+      height: 62px;
+      border-radius: 50%;
+      border: 0;
+      font-size: 24px;
+      cursor: pointer;
+    }
+
+    .call-accept {
+      background: #18c99a;
+      color: #fff;
+    }
+
+    .call-reject,
+    .call-end {
+      background: #e95757;
+      color: #fff;
+    }
+
+    .call-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 99998;
+      background: #05070a;
+      overflow: hidden;
+    }
+
+    .remote-video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #05070a;
+    }
+
+    .local-video {
+      position: absolute;
+      right: 18px;
+      top: 18px;
+      width: min(30vw, 220px);
+      aspect-ratio: 3 / 4;
+      object-fit: cover;
+      border-radius: 18px;
+      background: #111;
+      border: 1px solid rgba(255,255,255,.18);
+      box-shadow: 0 12px 35px rgba(0,0,0,.4);
+    }
+
+    .call-screen-audio {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      background:
+        radial-gradient(
+          circle at center,
+          #18232c 0%,
+          #080b0e 65%
+        );
+    }
+
+    .call-screen-audio .avatar.large {
+      width: 120px;
+      height: 120px;
+      font-size: 42px;
+      margin-bottom: 22px;
+    }
+
+    .call-screen-name {
+      color: #fff;
+      font-size: 24px;
+      font-weight: 700;
+    }
+
+    .call-screen-status {
+      color: #8e9aa8;
+      margin-top: 8px;
+    }
+
+    .call-controls {
+      position: absolute;
+      left: 50%;
+      bottom: max(28px, env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      display: flex;
+      gap: 16px;
+      padding: 10px 16px;
+      border-radius: 999px;
+      background: rgba(16,20,25,.82);
+      backdrop-filter: blur(18px);
+    }
+
+    .call-control {
+      width: 54px;
+      height: 54px;
+      border: 0;
+      border-radius: 50%;
+      background: #252c34;
+      color: #fff;
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .call-control.active {
+      background: #18c99a;
+    }
+
+    .call-control.end {
+      background: #e95757;
+    }
+
+    @media (max-width: 600px) {
+      .call-card {
+        padding: 26px 20px;
+        border-radius: 24px;
+      }
+
+      .local-video {
+        width: 110px;
+        right: 12px;
+        top: 12px;
+        border-radius: 14px;
+      }
+
+      .call-controls {
+        bottom: max(18px, env(safe-area-inset-bottom));
+      }
+
+      .call-control {
+        width: 50px;
+        height: 50px;
+      }
+    }
+  `;
+
+  document.head.appendChild(style);
+}
+
+function isCallingUser(userId) {
+  return Boolean(
+    currentCall &&
+    currentCall.userId === userId
+  );
+}
+
+async function startCall(
+  type,
+  user
+) {
+  if (!me || !user) return;
+
+  if (user.id === me.id) {
     showToast(
-      error.message
+      "自分には通話できません"
+    );
+    return;
+  }
+
+  if (callBusy || currentCall) {
+    showToast(
+      "すでに通話中です"
+    );
+    return;
+  }
+
+  if (!user.online) {
+    showToast(
+      "相手がオフラインです"
+    );
+    return;
+  }
+
+  callBusy = true;
+
+  currentCall = {
+    userId: user.id,
+    user,
+    type,
+    role: "caller"
+  };
+
+  showOutgoingCallUI();
+
+  socket.emit(
+    "call-user",
+    {
+      to: user.id,
+      from: me.id,
+      type
+    }
+  );
+}
+
+function showOutgoingCallUI() {
+  removeCallUI();
+
+  const user =
+    currentCall.user;
+
+  const overlay =
+    document.createElement(
+      "div"
+    );
+
+  overlay.className =
+    "call-overlay";
+
+  overlay.id =
+    "outgoing-call-overlay";
+
+  overlay.innerHTML = `
+    <div class="call-card">
+
+      ${avatarHtml(
+        user,
+        true
+      )}
+
+      <div class="call-name">
+        ${escapeHtml(user.name)}
+      </div>
+
+      <div class="call-status">
+        ${
+          currentCall.type === "video"
+            ? "ビデオ通話を発信中…"
+            : "音声通話を発信中…"
+        }
+      </div>
+
+      <div class="call-actions">
+
+        <button
+          class="call-action call-reject"
+          id="cancel-outgoing-call"
+        >
+          ☎
+        </button>
+
+      </div>
+
+    </div>
+  `;
+
+  document.body.appendChild(
+    overlay
+  );
+
+  document
+    .getElementById(
+      "cancel-outgoing-call"
+    )
+    .addEventListener(
+      "click",
+      () => {
+        endCall(true);
+      }
+    );
+}
+
+function showIncomingCallUI(data) {
+  if (!me) return;
+
+  if (
+    callBusy ||
+    currentCall
+  ) {
+    socket.emit(
+      "call-rejected",
+      {
+        to: data.from,
+        from: me.id
+      }
+    );
+
+    return;
+  }
+
+  const caller =
+    data.fromUser || {
+      id: data.from,
+      name: "通話"
+    };
+
+  currentCall = {
+    userId: data.from,
+    user: caller,
+    type:
+      data.type === "video"
+        ? "video"
+        : "audio",
+    role: "callee"
+  };
+
+  callBusy = true;
+
+  removeCallUI();
+
+  const overlay =
+    document.createElement(
+      "div"
+    );
+
+  overlay.className =
+    "call-overlay";
+
+  overlay.id =
+    "incoming-call-overlay";
+
+  overlay.innerHTML = `
+    <div class="call-card">
+
+      ${avatarHtml(
+        caller,
+        true
+      )}
+
+      <div class="call-name">
+        ${escapeHtml(
+          caller.name ||
+          "通話"
+        )}
+      </div>
+
+      <div class="call-status">
+        ${
+          currentCall.type === "video"
+            ? "ビデオ通話がかかってきています"
+            : "音声通話がかかってきています"
+        }
+      </div>
+
+      <div class="call-actions">
+
+        <button
+          class="call-action call-reject"
+          id="reject-incoming-call"
+        >
+          ×
+        </button>
+
+        <button
+          class="call-action call-accept"
+          id="accept-incoming-call"
+        >
+          ☎
+        </button>
+
+      </div>
+
+    </div>
+  `;
+
+  document.body.appendChild(
+    overlay
+  );
+
+  document
+    .getElementById(
+      "reject-incoming-call"
+    )
+    .addEventListener(
+      "click",
+      () => {
+        rejectIncomingCall();
+      }
+    );
+
+  document
+    .getElementById(
+      "accept-incoming-call"
+    )
+    .addEventListener(
+      "click",
+      () => {
+        acceptIncomingCall();
+      }
+    );
+
+  showBrowserNotification(
+    "morimori 通話",
+    `${caller.name || "友達"}から${
+      currentCall.type === "video"
+        ? "ビデオ"
+        : "音声"
+    }通話です`
+  );
+}
+
+async function acceptIncomingCall() {
+  if (
+    !currentCall ||
+    currentCall.role !== "callee"
+  ) {
+    return;
+  }
+
+  removeCallUI();
+
+  try {
+    await prepareLocalMedia(
+      currentCall.type
+    );
+
+    createPeerConnection();
+
+    socket.emit(
+      "call-accepted",
+      {
+        to: currentCall.userId,
+        from: me.id,
+        type: currentCall.type
+      }
+    );
+
+    showCallScreen();
+  } catch (error) {
+    showToast(
+      getMediaErrorMessage(error)
+    );
+
+    rejectIncomingCall();
+  }
+}
+
+function rejectIncomingCall() {
+  if (!currentCall) return;
+
+  socket.emit(
+    "call-rejected",
+    {
+      to: currentCall.userId,
+      from: me.id
+    }
+  );
+
+  cleanupCall();
+}
+
+async function prepareLocalMedia(type) {
+  if (localStream) {
+    localStream
+      .getTracks()
+      .forEach(track =>
+        track.stop()
+      );
+
+    localStream = null;
+  }
+
+  const constraints = {
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    },
+    video:
+      type === "video"
+        ? {
+            facingMode: "user",
+            width: {
+              ideal: 1280
+            },
+            height: {
+              ideal: 720
+            }
+          }
+        : false
+  };
+
+  localStream =
+    await navigator.mediaDevices.getUserMedia(
+      constraints
+    );
+}
+
+function createPeerConnection() {
+  if (peerConnection) {
+    peerConnection.close();
+  }
+
+  peerConnection =
+    new RTCPeerConnection(
+      RTC_CONFIG
+    );
+
+  pendingIceCandidates = [];
+
+  if (localStream) {
+    localStream
+      .getTracks()
+      .forEach(track => {
+        peerConnection.addTrack(
+          track,
+          localStream
+        );
+      });
+  }
+
+  peerConnection.onicecandidate =
+    event => {
+      if (!event.candidate) return;
+
+      if (!currentCall) return;
+
+      socket.emit(
+        "webrtc-ice",
+        {
+          to:
+            currentCall.userId,
+          from: me.id,
+          candidate:
+            event.candidate
+        }
+      );
+    };
+
+  peerConnection.ontrack =
+    event => {
+      let remoteVideo =
+        document.getElementById(
+          "remote-video"
+        );
+
+      let remoteAudio =
+        document.getElementById(
+          "remote-audio"
+        );
+
+      if (
+        currentCall?.type ===
+        "video"
+      ) {
+        if (remoteVideo) {
+          remoteVideo.srcObject =
+            event.streams[0];
+        }
+      } else {
+        if (remoteAudio) {
+          remoteAudio.srcObject =
+            event.streams[0];
+        }
+      }
+    };
+
+  peerConnection.onconnectionstatechange =
+    () => {
+      if (!peerConnection) {
+        return;
+      }
+
+      const state =
+        peerConnection.connectionState;
+
+      if (
+        state === "connected"
+      ) {
+        updateCallStatus(
+          "通話中"
+        );
+      }
+
+      if (
+        state === "disconnected"
+      ) {
+        updateCallStatus(
+          "接続が不安定です"
+        );
+      }
+
+      if (
+        state === "failed"
+      ) {
+        showToast(
+          "通話接続に失敗しました"
+        );
+
+        endCall(true);
+      }
+    };
+
+  peerConnection.oniceconnectionstatechange =
+    () => {
+      if (!peerConnection) {
+        return;
+      }
+
+      if (
+        peerConnection.iceConnectionState ===
+        "failed"
+      ) {
+        showToast(
+          "ネットワーク接続を確立できませんでした"
+        );
+      }
+    };
+}
+
+async function createCallerOffer() {
+  if (
+    !peerConnection ||
+    !currentCall
+  ) {
+    return;
+  }
+
+  const offer =
+    await peerConnection.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo:
+        currentCall.type ===
+        "video"
+    });
+
+  await peerConnection.setLocalDescription(
+    offer
+  );
+
+  socket.emit(
+    "webrtc-offer",
+    {
+      to: currentCall.userId,
+      from: me.id,
+      offer
+    }
+  );
+}
+
+async function handleOffer(data) {
+  if (!currentCall) return;
+
+  if (
+    data.from !==
+    currentCall.userId
+  ) {
+    return;
+  }
+
+  try {
+    if (!peerConnection) {
+      await prepareLocalMedia(
+        currentCall.type
+      );
+
+      createPeerConnection();
+
+      showCallScreen();
+    }
+
+    await peerConnection.setRemoteDescription(
+      new RTCSessionDescription(
+        data.offer
+      )
+    );
+
+    await flushPendingIce();
+
+    const answer =
+      await peerConnection.createAnswer();
+
+    await peerConnection.setLocalDescription(
+      answer
+    );
+
+    socket.emit(
+      "webrtc-answer",
+      {
+        to: currentCall.userId,
+        from: me.id,
+        answer
+      }
+    );
+
+    updateCallStatus(
+      "接続中…"
+    );
+  } catch (error) {
+    console.error(
+      "offer error",
+      error
+    );
+
+    showToast(
+      "通話の接続に失敗しました"
     );
   }
+}
+
+async function handleAnswer(data) {
+  if (
+    !peerConnection ||
+    !currentCall
+  ) {
+    return;
+  }
+
+  if (
+    data.from !==
+    currentCall.userId
+  ) {
+    return;
+  }
+
+  try {
+    await peerConnection.setRemoteDescription(
+      new RTCSessionDescription(
+        data.answer
+      )
+    );
+
+    await flushPendingIce();
+
+    updateCallStatus(
+      "接続中…"
+    );
+  } catch (error) {
+    console.error(
+      "answer error",
+      error
+    );
+  }
+}
+
+async function handleIce(data) {
+  if (
+    !currentCall ||
+    data.from !==
+      currentCall.userId
+  ) {
+    return;
+  }
+
+  const candidate =
+    new RTCIceCandidate(
+      data.candidate
+    );
+
+  if (
+    peerConnection &&
+    peerConnection.remoteDescription
+  ) {
+    try {
+      await peerConnection.addIceCandidate(
+        candidate
+      );
+    } catch (error) {
+      console.error(
+        "ICE error",
+        error
+      );
+    }
+  } else {
+    pendingIceCandidates.push(
+      candidate
+    );
+  }
+}
+
+async function flushPendingIce() {
+  if (
+    !peerConnection ||
+    !peerConnection.remoteDescription
+  ) {
+    return;
+  }
+
+  const candidates =
+    pendingIceCandidates;
+
+  pendingIceCandidates = [];
+
+  for (
+    const candidate of candidates
+  ) {
+    try {
+      await peerConnection.addIceCandidate(
+        candidate
+      );
+    } catch (error) {
+      console.error(
+        "queued ICE error",
+        error
+      );
+    }
+  }
+}
+
+function showCallScreen() {
+  removeCallUI();
+
+  if (!currentCall) return;
+
+  const screen =
+    document.createElement(
+      "div"
+    );
+
+  screen.className =
+    "call-screen";
+
+  screen.id =
+    "active-call-screen";
+
+  if (
+    currentCall.type ===
+    "video"
+  ) {
+    screen.innerHTML = `
+      <video
+        id="remote-video"
+        class="remote-video"
+        autoplay
+        playsinline
+      ></video>
+
+      <video
+        id="local-video"
+        class="local-video"
+        autoplay
+        muted
+        playsinline
+      ></video>
+
+      <audio
+        id="remote-audio"
+        autoplay
+      ></audio>
+
+      <div class="call-controls">
+
+        <button
+          class="call-control"
+          id="mute-call"
+          title="ミュート"
+        >
+          🎙
+        </button>
+
+        <button
+          class="call-control"
+          id="toggle-camera"
+          title="カメラ"
+        >
+          📷
+        </button>
+
+        <button
+          class="call-control end"
+          id="end-active-call"
+          title="終了"
+        >
+          ☎
+        </button>
+
+      </div>
+    `;
+  } else {
+    screen.innerHTML = `
+      <div class="call-screen-audio">
+
+        <div id="audio-call-avatar">
+          ${avatarHtml(
+            currentCall.user,
+            true
+          )}
+        </div>
+
+        <div class="call-screen-name">
+          ${escapeHtml(
+            currentCall.user.name
+          )}
+        </div>
+
+        <div
+          class="call-screen-status"
+          id="active-call-status"
+        >
+          接続中…
+        </div>
+
+      </div>
+
+      <audio
+        id="remote-audio"
+        autoplay
+      ></audio>
+
+      <div class="call-controls">
+
+        <button
+          class="call-control"
+          id="mute-call"
+          title="ミュート"
+        >
+          🎙
+        </button>
+
+        <button
+          class="call-control end"
+          id="end-active-call"
+          title="終了"
+        >
+          ☎
+        </button>
+
+      </div>
+    `;
+  }
+
+  document.body.appendChild(
+    screen
+  );
+
+  const localVideo =
+    document.getElementById(
+      "local-video"
+    );
+
+  if (
+    localVideo &&
+    localStream
+  ) {
+    localVideo.srcObject =
+      localStream;
+  }
+
+  document
+    .getElementById(
+      "mute-call"
+    )
+    ?.addEventListener(
+      "click",
+      toggleMute
+    );
+
+  document
+    .getElementById(
+      "toggle-camera"
+    )
+    ?.addEventListener(
+      "click",
+      toggleCamera
+    );
+
+  document
+    .getElementById(
+      "end-active-call"
+    )
+    ?.addEventListener(
+      "click",
+      () => {
+        endCall(true);
+      }
+    );
+}
+
+function updateCallStatus(text) {
+  const status =
+    document.getElementById(
+      "active-call-status"
+    );
+
+  if (status) {
+    status.textContent =
+      text;
+  }
+
+  const outgoing =
+    document.querySelector(
+      "#outgoing-call-overlay .call-status"
+    );
+
+  if (outgoing) {
+    outgoing.textContent =
+      text;
+  }
+}
+
+function toggleMute() {
+  if (!localStream) return;
+
+  const audioTracks =
+    localStream.getAudioTracks();
+
+  if (!audioTracks.length) {
+    return;
+  }
+
+  const enabled =
+    audioTracks[0].enabled;
+
+  audioTracks.forEach(
+    track => {
+      track.enabled =
+        !enabled;
+    }
+  );
+
+  const button =
+    document.getElementById(
+      "mute-call"
+    );
+
+  if (button) {
+    button.classList.toggle(
+      "active",
+      !enabled
+    );
+
+    button.textContent =
+      !enabled
+        ? "🎙"
+        : "🔇";
+  }
+}
+
+function toggleCamera() {
+  if (!localStream) return;
+
+  const videoTracks =
+    localStream.getVideoTracks();
+
+  if (!videoTracks.length) {
+    return;
+  }
+
+  const enabled =
+    videoTracks[0].enabled;
+
+  videoTracks.forEach(
+    track => {
+      track.enabled =
+        !enabled;
+    }
+  );
+
+  const button =
+    document.getElementById(
+      "toggle-camera"
+    );
+
+  if (button) {
+    button.classList.toggle(
+      "active",
+      !enabled
+    );
+
+    button.textContent =
+      !enabled
+        ? "📷"
+        : "🚫";
+  }
+}
+
+function endCall(notify = true) {
+  if (
+    notify &&
+    currentCall
+  ) {
+    socket.emit(
+      "call-ended",
+      {
+        to:
+          currentCall.userId,
+        from: me?.id
+      }
+    );
+  }
+
+  cleanupCall();
+}
+
+function cleanupCall() {
+  if (peerConnection) {
+    peerConnection.ontrack =
+      null;
+    peerConnection.onicecandidate =
+      null;
+    peerConnection.close();
+    peerConnection = null;
+  }
+
+  if (localStream) {
+    localStream
+      .getTracks()
+      .forEach(track =>
+        track.stop()
+      );
+
+    localStream = null;
+  }
+
+  pendingIceCandidates = [];
+
+  currentCall = null;
+  callBusy = false;
+
+  removeCallUI();
+}
+
+function removeCallUI() {
+  document
+    .querySelectorAll(
+      "#incoming-call-overlay, #outgoing-call-overlay, #active-call-screen"
+    )
+    .forEach(element =>
+      element.remove()
+    );
+}
+
+function getMediaErrorMessage(error) {
+  if (
+    error?.name ===
+    "NotAllowedError"
+  ) {
+    return "マイク・カメラの使用を許可してください";
+  }
+
+  if (
+    error?.name ===
+    "NotFoundError"
+  ) {
+    return "マイクまたはカメラが見つかりません";
+  }
+
+  if (
+    error?.name ===
+    "NotReadableError"
+  ) {
+    return "マイクまたはカメラを他のアプリが使用しています";
+  }
+
+  return "マイク・カメラを使用できません";
 }
 
 /* ==================================================
@@ -2261,12 +3307,11 @@ socket.on(
   }
 );
 
+/* ---------- メッセージ ---------- */
+
 socket.on(
   "message",
   message => {
-    /*
-      今開いているチャット
-    */
     if (
       currentChatUser &&
       (
@@ -2300,10 +3345,6 @@ socket.on(
       return;
     }
 
-    /*
-      閉じているチャットなら
-      友達一覧を更新
-    */
     loadFriends()
       .then(() => {
         if (
@@ -2374,6 +3415,8 @@ socket.on(
   }
 );
 
+/* ---------- オンライン ---------- */
+
 socket.on(
   "presence",
   async data => {
@@ -2403,11 +3446,12 @@ socket.on(
       "friends"
     ) {
       await loadFriends();
-
       renderFriendsPage();
     }
   }
 );
+
+/* ---------- 友達申請 ---------- */
 
 socket.on(
   "friend-request",
@@ -2504,9 +3548,7 @@ socket.on(
 socket.on(
   "message-deleted",
   async data => {
-    if (
-      !currentChatUser
-    ) {
+    if (!currentChatUser) {
       return;
     }
 
@@ -2525,10 +3567,10 @@ socket.on(
     if (!user) return;
 
     if (
-      user.id === me.id
+      user.id ===
+      me.id
     ) {
       me = user;
-
       saveMe();
     }
 
@@ -2566,6 +3608,130 @@ socket.on(
       renderFriendsPage();
     }
   }
+);
+
+/* ==================================================
+   通話 Socket.IO
+================================================== */
+
+socket.on(
+  "incoming-call",
+  data => {
+    if (!data?.from) {
+      return;
+    }
+
+    showIncomingCallUI(
+      data
+    );
+  }
+);
+
+socket.on(
+  "call-accepted",
+  async data => {
+    if (
+      !currentCall ||
+      currentCall.role !==
+        "caller"
+    ) {
+      return;
+    }
+
+    if (
+      data.from !==
+      currentCall.userId
+    ) {
+      return;
+    }
+
+    try {
+      await prepareLocalMedia(
+        currentCall.type
+      );
+
+      createPeerConnection();
+
+      showCallScreen();
+
+      updateCallStatus(
+        "接続中…"
+      );
+
+      await createCallerOffer();
+    } catch (error) {
+      console.error(
+        error
+      );
+
+      showToast(
+        getMediaErrorMessage(
+          error
+        )
+      );
+
+      endCall(true);
+    }
+  }
+);
+
+socket.on(
+  "call-rejected",
+  data => {
+    if (
+      !currentCall ||
+      data?.from !==
+        currentCall.userId
+    ) {
+      return;
+    }
+
+    showToast(
+      "通話が拒否されました"
+    );
+
+    cleanupCall();
+  }
+);
+
+socket.on(
+  "call-ended",
+  data => {
+    if (
+      !currentCall
+    ) {
+      return;
+    }
+
+    if (
+      data?.from &&
+      data.from !==
+        currentCall.userId
+    ) {
+      return;
+    }
+
+    showToast(
+      "通話が終了しました"
+    );
+
+    cleanupCall();
+  }
+);
+
+socket.on(
+  "webrtc-offer",
+  handleOffer
+);
+
+socket.on(
+  "webrtc-answer",
+  handleAnswer
+);
+
+socket.on(
+  "webrtc-ice",
+  handleIce
 );
 
 /* ==================================================
@@ -2628,6 +3794,34 @@ function showBrowserNotification(
     // 無視
   }
 }
+
+/* ==================================================
+   ページ終了時
+================================================== */
+
+window.addEventListener(
+  "beforeunload",
+  () => {
+    if (currentCall) {
+      socket.emit(
+        "call-ended",
+        {
+          to:
+            currentCall.userId,
+          from: me?.id
+        }
+      );
+    }
+
+    if (localStream) {
+      localStream
+        .getTracks()
+        .forEach(track =>
+          track.stop()
+        );
+    }
+  }
+);
 
 /* ==================================================
    開始
