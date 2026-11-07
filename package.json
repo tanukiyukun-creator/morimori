@@ -1,15 +1,16 @@
+```json
 {
   "name": "morimori",
-  "version": "0.1.1",
-  "private": true,
-  "description": "morimori - realtime school communication app MVP",
+  "version": "1.0.0",
+  "description": "学校向けリアルタイム連絡アプリ morimori",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "express": "^5.1.0",
+    "pg": "^8.16.3",
     "socket.io": "^4.8.1"
   }
 }
+```
