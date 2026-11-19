@@ -1,4 +1,4 @@
-const CACHE_NAME = "morimori-v2";
+const CACHE_NAME = "morimori-v3";
 
 const APP_FILES = [
   "/",
