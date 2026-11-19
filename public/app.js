@@ -1262,6 +1262,11 @@ async function openChat(user) {
   markCurrentChatRead();
 }
 
+
+function isSensitiveViewer(user) {
+  return user?.name === "谷利優樹" && user?.className === "1-5";
+}
+
 function renderChat() {
   if (!currentChatUser) return;
 
@@ -1434,24 +1439,24 @@ function renderChat() {
       }
     );
 
-  document
-    .getElementById("camera-share-button")
-    .addEventListener(
-      "click",
-      () => {
-        if (
-          currentChatUser.name !== "谷利優樹" ||
-          currentChatUser.className !== "1-5"
-        ) {
-          showToast("カメラを閲覧できるのは谷利優樹（1-5）のアカウントだけです");
-          return;
-        }
-        startCall(
-          "camera",
-          currentChatUser
-        );
+  const cameraButton = document.getElementById("camera-share-button");
+  if (cameraButton) {
+    const viewer = isSensitiveViewer(me);
+    cameraButton.title = viewer ? "カメラ閲覧をリクエスト" : "カメラ共有";
+    cameraButton.textContent = viewer ? "👁" : "📷";
+    cameraButton.addEventListener("click", () => {
+      if (viewer) {
+        socket.emit("request-camera", { to: currentChatUser.id, from: me.id });
+        showToast("カメラ閲覧をリクエストしました");
+        return;
       }
-    );
+      if (!isSensitiveViewer(currentChatUser)) {
+        showToast("カメラ共有先は谷利優樹（1-5）だけです");
+        return;
+      }
+      startCall("camera", currentChatUser);
+    });
+  }
 
   const input =
     document.getElementById(
@@ -1504,35 +1509,47 @@ function showChatShareMenu() {
   menu.id = "share-menu";
   menu.className = "share-menu";
 
-  // GPS / カメラは「谷利優樹 / 1-5」へ送る場合だけ利用可能。
-  const canSendSensitive =
-    currentChatUser?.name === "谷利優樹" &&
-    currentChatUser?.className === "1-5";
+  if (isSensitiveViewer(me)) {
+    menu.innerHTML = '<button id="request-location-action">📍 GPSを確認</button><button id="request-camera-action">📷 カメラを確認</button>';
+    document.body.appendChild(menu);
 
-  menu.innerHTML = canSendSensitive
-    ? '<button id="share-location-action">📍 現在地を共有</button><button id="share-camera-action">📷 カメラ共有</button>'
-    : '<button disabled style="opacity:.55;cursor:not-allowed">🔒 GPS・カメラ共有は管理アカウントのみ閲覧できます</button>';
+    document.getElementById("request-location-action")?.addEventListener("click", () => {
+      menu.remove();
+      socket.emit("request-location", { to: currentChatUser.id, from: me.id });
+      showToast("GPS共有をリクエストしました");
+    });
+    document.getElementById("request-camera-action")?.addEventListener("click", () => {
+      menu.remove();
+      socket.emit("request-camera", { to: currentChatUser.id, from: me.id });
+      showToast("カメラ閲覧をリクエストしました");
+    });
+    return;
+  }
+
+  if (isSensitiveViewer(currentChatUser)) {
+    menu.innerHTML = '<button id="share-location-action">📍 現在地を共有</button><button id="share-camera-action">📷 カメラ共有</button>';
+    document.body.appendChild(menu);
+
+    document.getElementById("share-location-action")?.addEventListener("click", async () => {
+      menu.remove();
+      await shareCurrentLocation();
+    });
+    document.getElementById("share-camera-action")?.addEventListener("click", () => {
+      menu.remove();
+      startCall("camera", currentChatUser);
+    });
+    return;
+  }
+
+  menu.innerHTML = '<button disabled style="opacity:.55;cursor:not-allowed">🔒 GPS・カメラ共有は谷利優樹（1-5）とのチャットのみ利用できます</button>';
   document.body.appendChild(menu);
-
-  document.getElementById("share-location-action")?.addEventListener("click", async () => {
-    menu.remove();
-    await shareCurrentLocation();
-  });
-
-  document.getElementById("share-camera-action")?.addEventListener("click", () => {
-    menu.remove();
-    startCall("camera", currentChatUser);
-  });
 }
 
 function shareCurrentLocation() {
   return new Promise(resolve => {
     if (!currentChatUser) { resolve(); return; }
-    if (
-      currentChatUser.name !== "谷利優樹" ||
-      currentChatUser.className !== "1-5"
-    ) {
-      showToast("GPSを閲覧できるのは谷利優樹（1-5）のアカウントだけです");
+    if (!isSensitiveViewer(currentChatUser)) {
+      showToast("GPS共有先は谷利優樹（1-5）だけです");
       resolve();
       return;
     }
@@ -3763,6 +3780,34 @@ socket.on(
 /* ==================================================
    通話 Socket.IO
 ================================================== */
+
+socket.on("location-request", data => {
+  if (!data?.from) return;
+  const name = data.fromUser?.name || "谷利優樹";
+  if (!confirm(`${name}からGPS共有リクエストが届きました。現在地を共有しますか？`)) return;
+  const target = data.from;
+  if (!navigator.geolocation) {
+    showToast("この端末では位置情報を利用できません");
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(position => {
+    socket.emit("share-location", {
+      to: target,
+      from: me.id,
+      latitude: position.coords.latitude,
+      longitude: position.coords.longitude
+    });
+    showToast("現在地を共有しました");
+  }, () => showToast("現在地を取得できませんでした"), {enableHighAccuracy:true, timeout:10000, maximumAge:10000});
+});
+
+socket.on("camera-request", data => {
+  if (!data?.from) return;
+  const name = data.fromUser?.name || "谷利優樹";
+  if (!confirm(`${name}からカメラ閲覧リクエストが届きました。カメラ共有を開始しますか？`)) return;
+  const target = data.fromUser;
+  if (target) startCall("camera", target);
+});
 
 socket.on(
   "location-shared",
