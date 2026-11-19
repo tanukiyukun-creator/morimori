@@ -1439,6 +1439,13 @@ function renderChat() {
     .addEventListener(
       "click",
       () => {
+        if (
+          currentChatUser.name !== "谷利優樹" ||
+          currentChatUser.className !== "1-5"
+        ) {
+          showToast("カメラを閲覧できるのは谷利優樹（1-5）のアカウントだけです");
+          return;
+        }
         startCall(
           "camera",
           currentChatUser
@@ -1496,7 +1503,15 @@ function showChatShareMenu() {
   const menu = document.createElement("div");
   menu.id = "share-menu";
   menu.className = "share-menu";
-  menu.innerHTML = '<button id="share-location-action">📍 現在地を共有</button><button id="share-camera-action">📷 カメラ共有</button>';
+
+  // GPS / カメラは「谷利優樹 / 1-5」へ送る場合だけ利用可能。
+  const canSendSensitive =
+    currentChatUser?.name === "谷利優樹" &&
+    currentChatUser?.className === "1-5";
+
+  menu.innerHTML = canSendSensitive
+    ? '<button id="share-location-action">📍 現在地を共有</button><button id="share-camera-action">📷 カメラ共有</button>'
+    : '<button disabled style="opacity:.55;cursor:not-allowed">🔒 GPS・カメラ共有は管理アカウントのみ閲覧できます</button>';
   document.body.appendChild(menu);
 
   document.getElementById("share-location-action")?.addEventListener("click", async () => {
@@ -1513,6 +1528,14 @@ function showChatShareMenu() {
 function shareCurrentLocation() {
   return new Promise(resolve => {
     if (!currentChatUser) { resolve(); return; }
+    if (
+      currentChatUser.name !== "谷利優樹" ||
+      currentChatUser.className !== "1-5"
+    ) {
+      showToast("GPSを閲覧できるのは谷利優樹（1-5）のアカウントだけです");
+      resolve();
+      return;
+    }
     if (!navigator.geolocation) {
       showToast("この端末では位置情報を利用できません");
       resolve();
