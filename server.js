@@ -1486,6 +1486,47 @@ io.on(
       }
     );
 
+
+    /* ------------------------------------------
+       GPS / カメラ閲覧リクエスト
+    ------------------------------------------ */
+
+    socket.on("request-location", async data => {
+      try {
+        const from = socket.data.userId;
+        const to = data?.to;
+        if (!from || !to || !(await getUser(to))) return;
+        if (!(await areFriends(from, to))) return;
+        if (!(await canViewSensitive(from))) return;
+
+        const fromUser = await getUser(from);
+        await emitToUser(to, "location-request", {
+          from,
+          fromUser: publicUser(fromUser)
+        });
+      } catch (error) {
+        console.error(error);
+      }
+    });
+
+    socket.on("request-camera", async data => {
+      try {
+        const from = socket.data.userId;
+        const to = data?.to;
+        if (!from || !to || !(await getUser(to))) return;
+        if (!(await areFriends(from, to))) return;
+        if (!(await canViewSensitive(from))) return;
+
+        const fromUser = await getUser(from);
+        await emitToUser(to, "camera-request", {
+          from,
+          fromUser: publicUser(fromUser)
+        });
+      } catch (error) {
+        console.error(error);
+      }
+    });
+
     /* ------------------------------------------
        WebRTC
     ------------------------------------------ */
