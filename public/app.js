@@ -1288,6 +1288,14 @@ function renderChat() {
             ▣
           </button>
 
+          <button
+            class="icon-button"
+            id="camera-share-button"
+            title="カメラ共有"
+          >
+            📷
+          </button>
+
         </div>
 
       </header>
@@ -1387,6 +1395,18 @@ function renderChat() {
       }
     );
 
+  document
+    .getElementById("camera-share-button")
+    .addEventListener(
+      "click",
+      () => {
+        startCall(
+          "camera",
+          currentChatUser
+        );
+      }
+    );
+
   const input =
     document.getElementById(
       "message-input"
@@ -1425,13 +1445,66 @@ function renderChat() {
     .addEventListener(
       "click",
       () => {
-        showToast(
-          "画像・ファイル送信は次の段階で追加します"
-        );
+        showChatShareMenu();
       }
     );
 }
 
+function showChatShareMenu() {
+  const existing = document.getElementById("share-menu");
+  if (existing) { existing.remove(); return; }
+
+  const menu = document.createElement("div");
+  menu.id = "share-menu";
+  menu.className = "share-menu";
+  menu.innerHTML = '<button id="share-location-action">📍 現在地を共有</button><button id="share-camera-action">📷 カメラ共有</button>';
+  document.body.appendChild(menu);
+
+  document.getElementById("share-location-action")?.addEventListener("click", async () => {
+    menu.remove();
+    await shareCurrentLocation();
+  });
+
+  document.getElementById("share-camera-action")?.addEventListener("click", () => {
+    menu.remove();
+    startCall("camera", currentChatUser);
+  });
+}
+
+function shareCurrentLocation() {
+  return new Promise(resolve => {
+    if (!currentChatUser) { resolve(); return; }
+    if (!navigator.geolocation) {
+      showToast("この端末では位置情報を利用できません");
+      resolve();
+      return;
+    }
+    showToast("現在地を取得しています…");
+    navigator.geolocation.getCurrentPosition(
+      position => {
+        socket.emit("share-location", {
+          to: currentChatUser.id,
+          from: me.id,
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude
+        });
+        showToast("現在地を共有しました");
+        resolve();
+      },
+      error => {
+        showToast(error.code === 1 ? "位置情報の利用を許可してください" : "現在地を取得できませんでした");
+        resolve();
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 }
+    );
+  });
+}
+
+function locationMessageHtml(message) {
+  const mine = message.from === me.id;
+  const mapUrl = "https://www.google.com/maps?q=" + encodeURIComponent(message.latitude) + "," + encodeURIComponent(message.longitude);
+  return '<div class="message-row ' + (mine ? "mine" : "theirs") + '"><div class="message-bubble location-bubble"><div class="location-title">📍 位置情報</div><div class="location-subtitle">' + (mine ? "現在地を共有しました" : "現在地が共有されました") + '</div><a class="location-link" href="' + mapUrl + '" target="_blank" rel="noopener noreferrer">地図で見る</a><div class="message-bottom">' + formatTime(message.createdAt) + '</div></div></div>';
+}
 function autoResizeTextarea(event) {
   const textarea =
     event.target;
@@ -1537,6 +1610,10 @@ function renderMessages() {
 }
 
 function messageHtml(message) {
+  if (message.kind === "location") {
+    return locationMessageHtml(message);
+  }
+
   const mine =
     message.from === me.id;
 
@@ -2382,7 +2459,9 @@ function showOutgoingCallUI() {
         ${
           currentCall.type === "video"
             ? "ビデオ通話を発信中…"
-            : "音声通話を発信中…"
+            : currentCall.type === "camera"
+              ? "カメラ共有を開始中…"
+              : "音声通話を発信中…"
         }
       </div>
 
@@ -2484,7 +2563,9 @@ function showIncomingCallUI(data) {
         ${
           currentCall.type === "video"
             ? "ビデオ通話がかかってきています"
-            : "音声通話がかかってきています"
+            : currentCall.type === "camera"
+              ? "カメラ共有がかかってきています"
+              : "音声通話がかかってきています"
         }
       </div>
 
@@ -2540,7 +2621,9 @@ function showIncomingCallUI(data) {
     `${caller.name || "友達"}から${
       currentCall.type === "video"
         ? "ビデオ"
-        : "音声"
+        : currentCall.type === "camera"
+          ? "カメラ共有"
+          : "音声"
     }通話です`
   );
 }
@@ -2607,13 +2690,16 @@ async function prepareLocalMedia(type) {
   }
 
   const constraints = {
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true
-    },
+    audio:
+      type === "camera"
+        ? false
+        : {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          },
     video:
-      type === "video"
+      type === "video" || type === "camera"
         ? {
             facingMode: "user",
             width: {
@@ -2686,8 +2772,8 @@ function createPeerConnection() {
         );
 
       if (
-        currentCall?.type ===
-        "video"
+        currentCall?.type === "video" ||
+        currentCall?.type === "camera"
       ) {
         if (remoteVideo) {
           remoteVideo.srcObject =
@@ -2960,8 +3046,8 @@ function showCallScreen() {
     "active-call-screen";
 
   if (
-    currentCall.type ===
-    "video"
+    currentCall.type === "video" ||
+    currentCall.type === "camera"
   ) {
     screen.innerHTML = `
       <video
@@ -3613,6 +3699,39 @@ socket.on(
 /* ==================================================
    通話 Socket.IO
 ================================================== */
+
+socket.on(
+  "location-shared",
+  data => {
+    if (
+      !data?.from ||
+      !Number.isFinite(Number(data.latitude)) ||
+      !Number.isFinite(Number(data.longitude))
+    ) {
+      return;
+    }
+
+    const locationMessage = {
+      id: "location-" + data.from + "-" + (data.sharedAt || Date.now()),
+      from: data.from,
+      to: me.id,
+      kind: "location",
+      latitude: Number(data.latitude),
+      longitude: Number(data.longitude),
+      createdAt: Number(data.sharedAt || Date.now())
+    };
+
+    if (currentChatUser?.id === data.from) {
+      currentMessages.push(locationMessage);
+      renderMessages();
+    }
+
+    showBrowserNotification(
+      "morimori 位置情報",
+      (data.fromUser?.name || "友達") + "から現在地が共有されました"
+    );
+  }
+);
 
 socket.on(
   "incoming-call",
