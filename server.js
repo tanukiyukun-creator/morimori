@@ -94,6 +94,21 @@ async function getUser(id) {
   return result.rows[0] || null;
 }
 
+
+/* ==================================================
+   GPS / カメラ閲覧権限
+   指定アカウントだけが位置情報・カメラ共有を受信できます。
+================================================== */
+const SENSITIVE_VIEWER_NAME = "谷利優樹";
+const SENSITIVE_VIEWER_CLASS = "1-5";
+
+async function canViewSensitive(userId) {
+  const user = await getUser(userId);
+  return !!user &&
+    user.name === SENSITIVE_VIEWER_NAME &&
+    user.class_name === SENSITIVE_VIEWER_CLASS;
+}
+
 function publicUser(user) {
   if (!user) return null;
 
@@ -1444,6 +1459,14 @@ io.on(
             return;
           }
 
+          // 位置情報は「谷利優樹 / 1-5」だけが閲覧できます。
+          if (!(await canViewSensitive(to))) {
+            await emitToUser(from, "location-share-denied", {
+              reason: "位置情報を閲覧できるアカウントではありません。"
+            });
+            return;
+          }
+
           const fromUser = await getUser(from);
 
           await emitToUser(
@@ -1489,6 +1512,25 @@ io.on(
             return;
           }
 
+          const callType =
+            ["audio", "video", "camera"].includes(
+              data?.type || data?.callType
+            )
+              ? (data?.type || data?.callType)
+              : "audio";
+
+          // カメラ共有の閲覧先は「谷利優樹 / 1-5」だけに限定。
+          if (
+            callType === "camera" &&
+            !(await canViewSensitive(to))
+          ) {
+            await emitToUser(from, "call-access-denied", {
+              type: "camera",
+              reason: "カメラ共有を閲覧できるアカウントではありません。"
+            });
+            return;
+          }
+
           const fromUser =
             await getUser(from);
 
@@ -1499,12 +1541,7 @@ io.on(
               from,
               fromUser:
                 publicUser(fromUser),
-              callType:
-                ["audio", "video", "camera"].includes(
-                  data?.type || data?.callType
-                )
-                  ? (data?.type || data?.callType)
-                  : "audio"
+              callType
             }
           );
         } catch (error) {
