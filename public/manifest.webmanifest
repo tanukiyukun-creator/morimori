@@ -1,7 +1,7 @@
 {
   "name": "morimori",
   "short_name": "morimori",
-  "description": "学校でつながるリアルタイム連絡アプリ",
+  "description": "リアルタイムでつながるコミュニケーションアプリ",
   "lang": "ja",
   "start_url": "/",
   "scope": "/",
@@ -9,21 +9,12 @@
   "orientation": "any",
   "background_color": "#0b0d10",
   "theme_color": "#0b0d10",
-  "categories": [
-    "social",
-    "communication"
-  ],
+  "categories": ["social", "communication"],
   "icons": [
     {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
       "purpose": "any maskable"
     }
   ]
