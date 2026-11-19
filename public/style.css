@@ -954,3 +954,67 @@ textarea {
     );
   }
 }
+
+/* =========================
+   共有メニュー
+========================= */
+
+.share-menu {
+  position: fixed;
+  right: 12px;
+  bottom: calc(72px + env(safe-area-inset-bottom));
+  z-index: 120;
+  width: min(250px, calc(100vw - 24px));
+  padding: 7px;
+  border: 1px solid #2b3941;
+  border-radius: 16px;
+  background: #11181d;
+  box-shadow: 0 18px 50px #0009;
+  backdrop-filter: blur(18px);
+}
+
+.share-menu button {
+  width: 100%;
+  padding: 12px 13px;
+  border-radius: 11px;
+  background: transparent;
+  color: #e5edf0;
+  text-align: left;
+}
+
+.share-menu button:hover {
+  background: #1a252b;
+}
+
+.location-bubble {
+  min-width: 190px;
+}
+
+.location-title {
+  font-weight: 750;
+}
+
+.location-subtitle {
+  margin-top: 4px;
+  color: #aab7bd;
+  font-size: 11px;
+}
+
+.location-link {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: #173b44;
+  color: #67e5fa;
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+@media (max-width: 600px) {
+  .share-menu {
+    right: 10px;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+}
