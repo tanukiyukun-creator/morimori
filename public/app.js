@@ -1264,7 +1264,7 @@ async function openChat(user) {
 
 
 function isSensitiveViewer(user) {
-  return user?.name === "谷利優樹" && user?.className === "1-5";
+  return user?.name === "谷利優樹";
 }
 
 function renderChat() {
@@ -1451,7 +1451,7 @@ function renderChat() {
         return;
       }
       if (!isSensitiveViewer(currentChatUser)) {
-        showToast("カメラ共有先は谷利優樹（1-5）だけです");
+        showToast("カメラ共有先は谷利優樹だけです");
         return;
       }
       startCall("camera", currentChatUser);
@@ -1541,7 +1541,7 @@ function showChatShareMenu() {
     return;
   }
 
-  menu.innerHTML = '<button disabled style="opacity:.55;cursor:not-allowed">🔒 GPS・カメラ共有は谷利優樹（1-5）とのチャットのみ利用できます</button>';
+  menu.innerHTML = '<button disabled style="opacity:.55;cursor:not-allowed">🔒 GPS・カメラ共有は谷利優樹とのチャットのみ利用できます</button>';
   document.body.appendChild(menu);
 }
 
@@ -1549,7 +1549,7 @@ function shareCurrentLocation() {
   return new Promise(resolve => {
     if (!currentChatUser) { resolve(); return; }
     if (!isSensitiveViewer(currentChatUser)) {
-      showToast("GPS共有先は谷利優樹（1-5）だけです");
+      showToast("GPS共有先は谷利優樹だけです");
       resolve();
       return;
     }
