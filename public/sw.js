@@ -1,11 +1,12 @@
-const CACHE_NAME = "morimori-v1";
+const CACHE_NAME = "morimori-v2";
 
 const APP_FILES = [
   "/",
   "/index.html",
   "/app.js",
   "/style.css",
-  "/manifest.webmanifest"
+  "/manifest.webmanifest",
+  "/icon.svg"
 ];
 
 /*
