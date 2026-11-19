@@ -2,6 +2,44 @@ const socket = io();
 
 const app = document.getElementById("app");
 
+let requestSyncTimer = null;
+
+socket.on("connect", () => {
+  if (me?.id) {
+    socket.emit("identify", me.id);
+  }
+});
+
+function startRequestSync() {
+  if (requestSyncTimer) return;
+
+  requestSyncTimer = setInterval(async () => {
+    if (!me || document.hidden) return;
+
+    try {
+      const beforeIncoming = incomingRequests.length;
+      await loadRequests();
+
+      if (
+        incomingRequests.length > beforeIncoming &&
+        currentPage !== "requests"
+      ) {
+        showToast("新しい友達申請が届きました");
+        showBrowserNotification(
+          "友達申請",
+          "新しい友達申請が届きました"
+        );
+      }
+
+      if (currentPage === "requests") {
+        renderRequestsPage();
+      }
+    } catch {
+      // 一時的な通信失敗は次回同期で再試行
+    }
+  }, 3000);
+}
+
 const STORAGE_KEY = "morimori-me";
 
 let me = null;
@@ -180,6 +218,7 @@ async function init() {
     renderFriendsPage();
 
     requestNotificationPermission();
+    startRequestSync();
   } catch {
     localStorage.removeItem(STORAGE_KEY);
     renderSetup();
