@@ -1415,6 +1415,55 @@ io.on(
     );
 
     /* ------------------------------------------
+       位置情報共有
+    ------------------------------------------ */
+
+    socket.on(
+      "share-location",
+      async data => {
+        try {
+          const from = socket.data.userId;
+          const to = data?.to;
+          const latitude = Number(data?.latitude);
+          const longitude = Number(data?.longitude);
+
+          if (
+            !from ||
+            !to ||
+            !Number.isFinite(latitude) ||
+            !Number.isFinite(longitude) ||
+            latitude < -90 ||
+            latitude > 90 ||
+            longitude < -180 ||
+            longitude > 180
+          ) {
+            return;
+          }
+
+          if (!(await areFriends(from, to))) {
+            return;
+          }
+
+          const fromUser = await getUser(from);
+
+          await emitToUser(
+            to,
+            "location-shared",
+            {
+              from,
+              fromUser: publicUser(fromUser),
+              latitude,
+              longitude,
+              sharedAt: Date.now()
+            }
+          );
+        } catch (error) {
+          console.error(error);
+        }
+      }
+    );
+
+    /* ------------------------------------------
        WebRTC
     ------------------------------------------ */
 
@@ -1451,8 +1500,10 @@ io.on(
               fromUser:
                 publicUser(fromUser),
               callType:
-                data.callType === "video"
-                  ? "video"
+                ["audio", "video", "camera"].includes(
+                  data?.type || data?.callType
+                )
+                  ? (data?.type || data?.callType)
                   : "audio"
             }
           );
