@@ -2523,9 +2523,11 @@ function showIncomingCallUI(data) {
     userId: data.from,
     user: caller,
     type:
-      data.type === "video"
+      data.callType === "video"
         ? "video"
-        : "audio",
+        : data.callType === "camera"
+          ? "camera"
+          : "audio",
     role: "callee"
   };
 
