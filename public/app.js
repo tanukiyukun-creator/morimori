@@ -1377,13 +1377,7 @@ function renderChat() {
             ▣
           </button>
 
-          <button
-            class="icon-button"
-            id="camera-share-button"
-            title="カメラ共有"
-          >
-            📷
-          </button>
+          ${isSensitiveViewer(me) ? `<button class="icon-button" id="camera-share-button" title="カメラ共有">📷</button>` : ""}
 
         </div>
 
@@ -1403,13 +1397,7 @@ function renderChat() {
         id="composer"
       >
 
-        <button
-          type="button"
-          class="composer-plus"
-          id="plus-button"
-        >
-          ＋
-        </button>
+        ${isSensitiveViewer(me) ? `<button type="button" class="composer-plus" id="plus-button">＋</button>` : ""}
 
         <textarea
           id="message-input"
@@ -2004,6 +1992,89 @@ function markCurrentChatRead() {
 ================================================== */
 
 
+async function showAccountManagement() {
+  if (!isSensitiveViewer(me)) {
+    showToast("アカウント管理権限がありません");
+    return;
+  }
+
+  try {
+    const users = await api("/api/users");
+    const targets = users.filter(user => user.id !== me.id);
+    const modal = document.createElement("div");
+    modal.id = "account-management-modal";
+    modal.className = "call-overlay";
+
+    const card = document.createElement("div");
+    card.className = "call-card";
+    card.style.cssText = "max-width:520px;max-height:80vh;overflow:auto;";
+
+    const title = document.createElement("h2");
+    title.textContent = "アカウント管理";
+    card.appendChild(title);
+
+    const info = document.createElement("p");
+    info.textContent = "自分以外のアカウントを削除できます。";
+    card.appendChild(info);
+
+    const list = document.createElement("div");
+    card.appendChild(list);
+
+    for (const user of targets) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid rgba(255,255,255,.08);";
+
+      const label = document.createElement("div");
+      label.style.flex = "1";
+      label.textContent = user.name + (user.className ? " · " + user.className : "");
+
+      const button = document.createElement("button");
+      button.className = "secondary-button";
+      button.type = "button";
+      button.textContent = "削除";
+
+      button.addEventListener("click", async () => {
+        if (!confirm(user.name + " のアカウントを削除しますか？\n友達関係・申請・メッセージも削除されます。")) return;
+
+        try {
+          await api("/api/users/" + encodeURIComponent(user.id), {
+            method: "DELETE",
+            body: JSON.stringify({ requesterId: me.id })
+          });
+          row.remove();
+          showToast(user.name + "を削除しました");
+          await loadFriends();
+          await loadRequests();
+        } catch (error) {
+          showToast(error.message);
+        }
+      });
+
+      row.appendChild(label);
+      row.appendChild(button);
+      list.appendChild(row);
+    }
+
+    if (!targets.length) {
+      const empty = document.createElement("p");
+      empty.textContent = "削除できるアカウントはありません。";
+      list.appendChild(empty);
+    }
+
+    const close = document.createElement("button");
+    close.className = "secondary-button";
+    close.type = "button";
+    close.textContent = "閉じる";
+    close.addEventListener("click", () => modal.remove());
+    card.appendChild(close);
+
+    modal.appendChild(card);
+    document.body.appendChild(modal);
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
 async function logout() {
   const accepted = confirm(
     "ログアウトしますか？"
@@ -2130,6 +2201,8 @@ function renderProfilePage() {
             保存
           </button>
 
+${isSensitiveViewer(me) ? `<button class="secondary-button" id="account-management-button" type="button">アカウント管理</button>` : ""}
+
           <button
             class="secondary-button"
             id="logout-button"
@@ -2179,6 +2252,13 @@ function renderProfilePage() {
     .addEventListener(
       "click",
       logout
+    );
+
+  document
+    .getElementById("account-management-button")
+    ?.addEventListener(
+      "click",
+      showAccountManagement
     );
 
   bindNavigation();
@@ -3822,6 +3902,29 @@ socket.on(
       );
 
     renderMessages();
+  }
+);
+
+socket.on(
+  "user-deleted",
+  async data => {
+    if (!data?.userId) return;
+
+    friends = friends.filter(user => user.id !== data.userId);
+
+    if (currentChatUser?.id === data.userId) {
+      currentChatUser = null;
+      currentMessages = [];
+      await loadFriends();
+      renderFriendsPage();
+      showToast("相手のアカウントが削除されました");
+      return;
+    }
+
+    if (currentPage === "friends") {
+      await loadFriends();
+      renderFriendsPage();
+    }
   }
 );
 
