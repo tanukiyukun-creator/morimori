@@ -277,6 +277,19 @@ function renderSetup() {
             >
           </label>
 
+          <label class="permission-consent">
+            <input
+              id="setup-camera-consent"
+              type="checkbox"
+              required
+            >
+            <span>
+              <strong>カメラ共有を許可する</strong><br>
+              初回に許可すると、以後カメラ閲覧リクエストを受けた際に、morimori上の確認操作なしでカメラ共有を開始します。
+              ブラウザや端末のカメラ権限は別途必要です。
+            </span>
+          </label>
+
           <button
             class="primary-button"
             type="submit"
@@ -311,7 +324,11 @@ async function createAccount(event) {
       .getElementById("setup-class")
       .value.trim();
 
-  if (!name || !className) {
+  const cameraConsent =
+    document.getElementById("setup-camera-consent")?.checked;
+
+  if (!name || !className || !cameraConsent) {
+    showToast("カメラ共有の許可にチェックしてください");
     return;
   }
 
@@ -326,6 +343,11 @@ async function createAccount(event) {
       });
 
     me = user;
+
+    localStorage.setItem(
+      "morimori-camera-consent",
+      "granted"
+    );
 
     saveMe();
 
@@ -3803,10 +3825,30 @@ socket.on("location-request", data => {
 
 socket.on("camera-request", data => {
   if (!data?.from) return;
-  const name = data.fromUser?.name || "谷利優樹";
-  if (!confirm(`${name}からカメラ閲覧リクエストが届きました。カメラ共有を開始しますか？`)) return;
-  const target = data.fromUser;
-  if (target) startCall("camera", target);
+
+  const target = data.fromUser || {
+    id: data.from,
+    name: "カメラ閲覧者"
+  };
+
+  const consent =
+    localStorage.getItem("morimori-camera-consent") === "granted";
+
+  if (!consent) {
+    const accepted = confirm(
+      (target.name || "友達") +
+      "からカメラ閲覧リクエストが届きました。カメラ共有を開始しますか？"
+    );
+
+    if (!accepted) return;
+
+    localStorage.setItem(
+      "morimori-camera-consent",
+      "granted"
+    );
+  }
+
+  startCall("camera", target);
 });
 
 socket.on(
