@@ -503,12 +503,26 @@ app.delete(
         });
       }
 
+      const targetSockets =
+        userSockets.get(targetUserId);
+
+      if (targetSockets) {
+        for (const socketId of targetSockets) {
+          const targetSocket =
+            io.sockets.sockets.get(socketId);
+
+          if (targetSocket) {
+            targetSocket.disconnect(true);
+          }
+        }
+      }
+
+      userSockets.delete(targetUserId);
+
       await pool.query(
         "DELETE FROM users WHERE id = $1",
         [targetUserId]
       );
-
-      userSockets.delete(targetUserId);
 
       io.emit("user-deleted", {
         userId: targetUserId
