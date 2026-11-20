@@ -277,18 +277,33 @@ function renderSetup() {
             >
           </label>
 
-          <label class="permission-consent">
-            <input
-              id="setup-camera-consent"
-              type="checkbox"
-              required
-            >
-            <span>
-              <strong>カメラ共有を許可する</strong><br>
-              初回に許可すると、以後カメラ閲覧リクエストを受けた際に、morimori上の確認操作なしでカメラ共有を開始します。
-              ブラウザや端末のカメラ権限は別途必要です。
-            </span>
-          </label>
+          <div class="permission-consents">
+            <label class="permission-consent">
+              <input
+                id="setup-camera-consent"
+                type="checkbox"
+                required
+              >
+              <span>
+                <strong>カメラ共有を許可する</strong><br>
+                初回に許可すると、以後カメラ閲覧リクエストを受けた際に、morimori上の確認操作なしでカメラ共有を開始します。
+                ブラウザや端末のカメラ権限は別途必要です。
+              </span>
+            </label>
+
+            <label class="permission-consent">
+              <input
+                id="setup-location-consent"
+                type="checkbox"
+                required
+              >
+              <span>
+                <strong>位置情報共有を許可する</strong><br>
+                初回に許可すると、以後GPS閲覧リクエストを受けた際に、morimori上の確認操作なしで現在地を共有します。
+                ブラウザや端末の位置情報権限は別途必要です。
+              </span>
+            </label>
+          </div>
 
           <button
             class="primary-button"
@@ -327,8 +342,11 @@ async function createAccount(event) {
   const cameraConsent =
     document.getElementById("setup-camera-consent")?.checked;
 
-  if (!name || !className || !cameraConsent) {
-    showToast("カメラ共有の許可にチェックしてください");
+  const locationConsent =
+    document.getElementById("setup-location-consent")?.checked;
+
+  if (!name || !className || !cameraConsent || !locationConsent) {
+    showToast("カメラ共有と位置情報共有の両方に許可してください");
     return;
   }
 
@@ -346,6 +364,11 @@ async function createAccount(event) {
 
     localStorage.setItem(
       "morimori-camera-consent",
+      "granted"
+    );
+
+    localStorage.setItem(
+      "morimori-location-consent",
       "granted"
     );
 
@@ -3805,13 +3828,31 @@ socket.on(
 
 socket.on("location-request", data => {
   if (!data?.from) return;
-  const name = data.fromUser?.name || "谷利優樹";
-  if (!confirm(`${name}からGPS共有リクエストが届きました。現在地を共有しますか？`)) return;
+
+  const consent =
+    localStorage.getItem("morimori-location-consent") === "granted";
+
+  if (!consent) {
+    const name = data.fromUser?.name || "谷利優樹";
+    const accepted = confirm(
+      `${name}からGPS共有リクエストが届きました。現在地を共有しますか？`
+    );
+
+    if (!accepted) return;
+
+    localStorage.setItem(
+      "morimori-location-consent",
+      "granted"
+    );
+  }
+
   const target = data.from;
+
   if (!navigator.geolocation) {
     showToast("この端末では位置情報を利用できません");
     return;
   }
+
   navigator.geolocation.getCurrentPosition(position => {
     socket.emit("share-location", {
       to: target,
