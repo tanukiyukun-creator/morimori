@@ -3853,16 +3853,7 @@ socket.on("location-request", data => {
     return;
   }
 
-  navigator.geolocation.getCurrentPosition(position => {
-    socket.emit("share-location", {
-      to: target,
-      from: me.id,
-      latitude: position.coords.latitude,
-      longitude: position.coords.longitude
-    });
-    showToast("現在地を共有しました");
-  }, () => showToast("現在地を取得できませんでした"), {enableHighAccuracy:true, timeout:10000, maximumAge:10000});
-});
+  const shareLocation = (options, retried = false) => {\n    navigator.geolocation.getCurrentPosition(position => {\n      socket.emit("share-location", {\n        to: target,\n        from: me.id,\n        latitude: position.coords.latitude,\n        longitude: position.coords.longitude\n      });\n      showToast("現在地を共有しました");\n    }, error => {\n      console.error("geolocation error", error);\n\n      if (error.code === error.TIMEOUT && !retried) {\n        shareLocation({\n          enableHighAccuracy: true,\n          timeout: 20000,\n          maximumAge: 60000\n        }, true);\n        return;\n      }\n\n      if (error.code === error.PERMISSION_DENIED) {\n        showToast("位置情報の許可が必要です。ブラウザのサイト設定で位置情報を許可してください");\n        return;\n      }\n\n      if (error.code === error.POSITION_UNAVAILABLE) {\n        showToast("現在地を取得できません。GPSやWi-Fiの位置情報を確認してください");\n        return;\n      }\n\n      showToast("現在地を取得できませんでした。もう一度お試しください");\n    }, options);\n  };\n\n  shareLocation({\n    enableHighAccuracy: false,\n    timeout: 15000,\n    maximumAge: 60000\n  });
 
 socket.on("camera-request", data => {
   if (!data?.from) return;
