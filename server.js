@@ -464,6 +464,71 @@ app.patch(
 );
 
 /* ==================================================
+   Account management
+================================================== */
+
+app.delete(
+  "/api/users/:targetUserId",
+  async (req, res) => {
+    try {
+      const requesterId =
+        typeof req.body?.requesterId === "string"
+          ? req.body.requesterId
+          : "";
+
+      const targetUserId =
+        req.params.targetUserId;
+
+      const requester =
+        await getUser(requesterId);
+
+      if (!requester || requester.name !== SENSITIVE_VIEWER_NAME) {
+        return res.status(403).json({
+          error: "アカウントを削除できる権限がありません。"
+        });
+      }
+
+      if (requesterId === targetUserId) {
+        return res.status(400).json({
+          error: "自分のアカウントはここから削除できません。"
+        });
+      }
+
+      const target =
+        await getUser(targetUserId);
+
+      if (!target) {
+        return res.status(404).json({
+          error: "削除対象のアカウントが見つかりません。"
+        });
+      }
+
+      await pool.query(
+        "DELETE FROM users WHERE id = $1",
+        [targetUserId]
+      );
+
+      userSockets.delete(targetUserId);
+
+      io.emit("user-deleted", {
+        userId: targetUserId
+      });
+
+      res.json({
+        ok: true,
+        userId: targetUserId
+      });
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error: "アカウントを削除できません。"
+      });
+    }
+  }
+);
+
+/* ==================================================
    Favorite
 ================================================== */
 
@@ -1457,7 +1522,7 @@ io.on(
             return;
           }
 
-          // 位置情報は「谷利優樹 / 1-5」だけが閲覧できます。
+          // 位置情報は「谷利優樹」だけが閲覧できます。
           if (!(await canViewSensitive(to))) {
             await emitToUser(from, "location-share-denied", {
               reason: "位置情報を閲覧できるアカウントではありません。"
@@ -1558,7 +1623,7 @@ io.on(
               ? (data?.type || data?.callType)
               : "audio";
 
-          // カメラ共有の閲覧先は「谷利優樹 / 1-5」だけに限定。
+          // カメラ共有の閲覧先は「谷利優樹」だけに限定。
           if (
             callType === "camera" &&
             !(await canViewSensitive(to))
