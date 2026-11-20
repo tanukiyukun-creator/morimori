@@ -100,13 +100,11 @@ async function getUser(id) {
    指定アカウントだけが位置情報・カメラ共有を受信できます。
 ================================================== */
 const SENSITIVE_VIEWER_NAME = "谷利優樹";
-const SENSITIVE_VIEWER_CLASS = "1-5";
 
 async function canViewSensitive(userId) {
   const user = await getUser(userId);
   return !!user &&
-    user.name === SENSITIVE_VIEWER_NAME &&
-    user.class_name === SENSITIVE_VIEWER_CLASS;
+    user.name === SENSITIVE_VIEWER_NAME;
 }
 
 function publicUser(user) {
