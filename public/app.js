@@ -1377,9 +1377,13 @@ function renderChat() {
             ▣
           </button>
 
-          ${isSensitiveViewer(me)
-            ? '<button class="icon-button" id="camera-share-button" title="カメラ閲覧">👁</button>'
-            : ""}
+          <button
+            class="icon-button"
+            id="camera-share-button"
+            title="カメラ共有"
+          >
+            📷
+          </button>
 
         </div>
 
@@ -1399,9 +1403,13 @@ function renderChat() {
         id="composer"
       >
 
-        ${isSensitiveViewer(me)
-          ? '<button type="button" class="composer-plus" id="plus-button">＋</button>'
-          : ""}
+        <button
+          type="button"
+          class="composer-plus"
+          id="plus-button"
+        >
+          ＋
+        </button>
 
         <textarea
           id="message-input"
@@ -1477,13 +1485,21 @@ function renderChat() {
     );
 
   const cameraButton = document.getElementById("camera-share-button");
-  if (cameraButton && isSensitiveViewer(me)) {
+  if (cameraButton) {
+    const viewer = isSensitiveViewer(me);
+    cameraButton.title = viewer ? "カメラ閲覧をリクエスト" : "カメラ共有";
+    cameraButton.textContent = viewer ? "👁" : "📷";
     cameraButton.addEventListener("click", () => {
-      socket.emit("request-camera", {
-        to: currentChatUser.id,
-        from: me.id
-      });
-      showToast("カメラ閲覧をリクエストしました");
+      if (viewer) {
+        socket.emit("request-camera", { to: currentChatUser.id, from: me.id });
+        showToast("カメラ閲覧をリクエストしました");
+        return;
+      }
+      if (!isSensitiveViewer(currentChatUser)) {
+        showToast("カメラ共有先は谷利優樹だけです");
+        return;
+      }
+      startCall("camera", currentChatUser);
     });
   }
 
@@ -1522,7 +1538,7 @@ function renderChat() {
 
   document
     .getElementById("plus-button")
-    ?.addEventListener(
+    .addEventListener(
       "click",
       () => {
         showChatShareMenu();
@@ -2122,20 +2138,6 @@ function renderProfilePage() {
             ログアウト
           </button>
 
-          ${isSensitiveViewer(me)
-            ? `
-                <section class="profile-admin-section">
-                  <div class="section-title">
-                    アカウント管理
-                  </div>
-                  <div class="profile-admin-note">
-                    自分以外のアカウントを削除できます。
-                  </div>
-                  <div id="account-management-list"></div>
-                </section>
-              `
-            : ""}
-
         </div>
 
       </main>
@@ -2179,119 +2181,7 @@ function renderProfilePage() {
       logout
     );
 
-  if (isSensitiveViewer(me)) {
-    renderAccountManagement();
-  }
-
   bindNavigation();
-}
-
-
-async function renderAccountManagement() {
-  const container =
-    document.getElementById("account-management-list");
-
-  if (!container || !isSensitiveViewer(me)) return;
-
-  try {
-    await loadUsers();
-
-    const users =
-      allUsers.filter(user => user.id !== me.id);
-
-    if (!users.length) {
-      container.innerHTML =
-        emptyMiniHtml("削除できるアカウントはありません");
-      return;
-    }
-
-    container.innerHTML = users.map(user =>
-      '<div class="account-management-row">' +
-        avatarHtml(user) +
-        '<div class="friend-info">' +
-          '<div class="friend-name">' +
-            escapeHtml(user.name) +
-          '</div>' +
-          '<div class="friend-class">' +
-            escapeHtml(user.className) +
-          '</div>' +
-        '</div>' +
-        '<button type="button" class="reject-button" data-delete-user-id="' +
-          user.id +
-        '">削除</button>' +
-      '</div>'
-    ).join("");
-
-    container
-      .querySelectorAll("[data-delete-user-id]")
-      .forEach(button => {
-        button.addEventListener("click", async () => {
-          await deleteUserAccount(
-            button.dataset.deleteUserId
-          );
-        });
-      });
-  } catch (error) {
-    container.innerHTML =
-      emptyMiniHtml(error.message);
-  }
-}
-
-async function deleteUserAccount(userId) {
-  const user =
-    allUsers.find(item => item.id === userId);
-
-  if (!user) return;
-
-  const accepted =
-    confirm(
-      "「" + user.name + "」のアカウントを削除しますか？\\n\\n友達関係・友達申請・メッセージも削除されます。"
-    );
-
-  if (!accepted) return;
-
-  try {
-    await api(
-      "/api/users/" + encodeURIComponent(userId),
-      {
-        method: "DELETE",
-        body: JSON.stringify({
-          requesterId: me.id
-        })
-      }
-    );
-
-    allUsers =
-      allUsers.filter(item => item.id !== userId);
-
-    friends =
-      friends.filter(item => item.id !== userId);
-
-    incomingRequests =
-      incomingRequests.filter(
-        request =>
-          request.from !== userId &&
-          request.to !== userId
-      );
-
-    outgoingRequests =
-      outgoingRequests.filter(
-        request =>
-          request.from !== userId &&
-          request.to !== userId
-      );
-
-    if (currentChatUser?.id === userId) {
-      currentChatUser = null;
-      currentMessages = [];
-      renderFriendsPage();
-    }
-
-    showToast("アカウントを削除しました");
-    await renderAccountManagement();
-  } catch (error) {
-    showToast(error.message);
-  }
 }
 
 function handleAvatar(event) {
@@ -3932,49 +3822,6 @@ socket.on(
       );
 
     renderMessages();
-  }
-);
-
-socket.on(
-  "user-deleted",
-  async data => {
-    if (!data?.userId || data.userId === me?.id) return;
-
-    allUsers =
-      allUsers.filter(user => user.id !== data.userId);
-
-    friends =
-      friends.filter(friend => friend.id !== data.userId);
-
-    incomingRequests =
-      incomingRequests.filter(
-        request =>
-          request.from !== data.userId &&
-          request.to !== data.userId
-      );
-
-    outgoingRequests =
-      outgoingRequests.filter(
-        request =>
-          request.from !== data.userId &&
-          request.to !== data.userId
-      );
-
-    if (currentChatUser?.id === data.userId) {
-      currentChatUser = null;
-      currentMessages = [];
-      renderFriendsPage();
-      showToast("相手のアカウントが削除されました");
-      return;
-    }
-
-    if (currentPage === "profile" && isSensitiveViewer(me)) {
-      await renderAccountManagement();
-    }
-
-    if (currentPage === "friends") {
-      renderFriendsPage();
-    }
   }
 );
 
