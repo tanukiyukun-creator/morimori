@@ -1519,7 +1519,7 @@ function renderChat() {
     cameraButton.addEventListener("click", () => {
       if (viewer) {
         socket.emit("request-camera", { to: currentChatUser.id, from: me.id });
-        showToast("カメラ閲覧をリクエストしました");
+        showToast("カメラ共有を開始しました");
         return;
       }
       if (!isSensitiveViewer(currentChatUser)) {
@@ -1588,7 +1588,7 @@ function showChatShareMenu() {
     document.getElementById("request-location-action")?.addEventListener("click", () => {
       menu.remove();
       socket.emit("request-location", { to: currentChatUser.id, from: me.id });
-      showToast("GPS共有をリクエストしました");
+      showToast("GPS共有を開始しました");
     });
     document.getElementById("request-camera-action")?.addEventListener("click", () => {
       menu.remove();
