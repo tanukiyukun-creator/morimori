@@ -1522,7 +1522,7 @@ function renderChat() {
 
   document
     .getElementById("plus-button")
-    .addEventListener(
+    ?.addEventListener(
       "click",
       () => {
         showChatShareMenu();
