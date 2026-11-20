@@ -3945,6 +3945,7 @@ socket.on("location-request", data => {
     timeout: 15000,
     maximumAge: 60000
   });
+});
 
 socket.on("camera-request", data => {
   if (!data?.from) return;
