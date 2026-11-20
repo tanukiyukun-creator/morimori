@@ -2003,6 +2003,43 @@ function markCurrentChatRead() {
    プロフィール
 ================================================== */
 
+
+async function logout() {
+  const accepted = confirm(
+    "ログアウトしますか？"
+  );
+
+  if (!accepted) return;
+
+  if (currentCall) {
+    try {
+      socket.emit("call-ended", {
+        to: currentCall.userId,
+        from: me?.id
+      });
+    } catch {
+      // 無視
+    }
+
+    cleanupCall();
+  }
+
+  localStorage.removeItem(STORAGE_KEY);
+  localStorage.removeItem("morimori-camera-consent");
+  localStorage.removeItem("morimori-location-consent");
+
+  me = null;
+  friends = [];
+  allUsers = [];
+  incomingRequests = [];
+  outgoingRequests = [];
+  currentChatUser = null;
+  currentMessages = [];
+  replyTarget = null;
+
+  renderSetup();
+}
+
 function renderProfilePage() {
   currentPage = "profile";
 
@@ -2093,6 +2130,14 @@ function renderProfilePage() {
             保存
           </button>
 
+          <button
+            class="secondary-button"
+            id="logout-button"
+            type="button"
+          >
+            ログアウト
+          </button>
+
         </div>
 
       </main>
@@ -2127,6 +2172,13 @@ function renderProfilePage() {
     .addEventListener(
       "click",
       saveProfile
+    );
+
+  document
+    .getElementById("logout-button")
+    .addEventListener(
+      "click",
+      logout
     );
 
   bindNavigation();
