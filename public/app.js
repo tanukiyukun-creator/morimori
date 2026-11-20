@@ -350,6 +350,45 @@ async function createAccount(event) {
     return;
   }
 
+  // 初回登録時のチェックを、実際のブラウザ権限の許可まで完了させる。
+  // これにより、登録後に初めてGPS/カメラを使うタイミングで再度ブラウザへ
+  // 許可を求められる状態を防ぐ。
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("このブラウザではカメラ共有を利用できません");
+    }
+
+    const cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: true
+    });
+    cameraStream.getTracks().forEach(track => track.stop());
+
+    if (!navigator.geolocation) {
+      throw new Error("このブラウザでは位置情報を利用できません");
+    }
+
+    await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        () => resolve(),
+        error => {
+          if (error?.code === error.PERMISSION_DENIED) {
+            reject(new Error("位置情報の許可が必要です"));
+            return;
+          }
+          reject(new Error("位置情報を確認できませんでした。もう一度お試しください"));
+        },
+        {
+          enableHighAccuracy: false,
+          timeout: 15000,
+          maximumAge: 0
+        }
+      );
+    });
+  } catch (permissionError) {
+    showToast(permissionError.message || "カメラと位置情報の許可が必要です");
+    return;
+  }
+
   try {
     const user =
       await api("/api/users", {
