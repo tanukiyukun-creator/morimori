@@ -10,6 +10,8 @@
   <string>morimoriは、位置情報共有をONにしたときに現在地を共有するために位置情報を使用します。</string>
   <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
   <string>morimoriは、位置情報共有をONにしたときに画面OFF中も位置情報を共有するために位置情報を使用します。</string>
+  <key>MORIMORI_BASE_URL</key>
+  <string>https://YOUR-MORIMORI-RENDER-URL.onrender.com</string>
   <key>UIBackgroundModes</key>
   <array>
     <string>location</string>
