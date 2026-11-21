@@ -464,6 +464,158 @@ app.patch(
 );
 
 /* ==================================================
+   Native background location
+   iOS/iPadOS app sends location only after the user
+   explicitly enables location sharing.
+================================================== */
+
+app.post(
+  "/api/location/update",
+  async (req, res) => {
+    try {
+      const userId =
+        typeof req.body?.userId === "string"
+          ? req.body.userId
+          : "";
+
+      const latitude = Number(req.body?.latitude);
+      const longitude = Number(req.body?.longitude);
+
+      if (
+        !userId ||
+        !Number.isFinite(latitude) ||
+        !Number.isFinite(longitude) ||
+        latitude < -90 ||
+        latitude > 90 ||
+        longitude < -180 ||
+        longitude > 180
+      ) {
+        return res.status(400).json({
+          error: "位置情報が不正です。"
+        });
+      }
+
+      const user = await getUser(userId);
+
+      if (!user) {
+        return res.status(404).json({
+          error: "ユーザーが見つかりません。"
+        });
+      }
+
+      const sharedAt = Date.now();
+
+      await pool.query(
+        `
+        UPDATE users
+        SET
+          last_latitude = $1,
+          last_longitude = $2,
+          last_location_at = $3
+        WHERE id = $4
+        `,
+        [latitude, longitude, sharedAt, userId]
+      );
+
+      const viewerResult = await pool.query(
+        `
+        SELECT id
+        FROM users
+        WHERE name = $1
+        LIMIT 1
+        `,
+        [SENSITIVE_VIEWER_NAME]
+      );
+
+      const viewer = viewerResult.rows[0];
+
+      if (viewer && viewer.id !== userId) {
+        await emitToUser(viewer.id, "location-shared", {
+          from: userId,
+          fromUser: publicUser(user),
+          latitude,
+          longitude,
+          sharedAt
+        });
+      }
+
+      res.json({
+        ok: true,
+        sharedAt
+      });
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error: "位置情報を保存できません。"
+      });
+    }
+  }
+);
+
+app.get(
+  "/api/location/latest/:userId",
+  async (req, res) => {
+    try {
+      const requesterId =
+        typeof req.query?.requesterId === "string"
+          ? req.query.requesterId
+          : "";
+
+      if (!(await canViewSensitive(requesterId))) {
+        return res.status(403).json({
+          error: "位置情報を閲覧できる権限がありません。"
+        });
+      }
+
+      const user = await getUser(req.params.userId);
+
+      if (!user) {
+        return res.status(404).json({
+          error: "ユーザーが見つかりません。"
+        });
+      }
+
+      const result = await pool.query(
+        `
+        SELECT
+          last_latitude,
+          last_longitude,
+          last_location_at
+        FROM users
+        WHERE id = $1
+        `,
+        [user.id]
+      );
+
+      const row = result.rows[0];
+
+      if (
+        row?.last_latitude == null ||
+        row?.last_longitude == null
+      ) {
+        return res.json({
+          available: false
+        });
+      }
+
+      res.json({
+        available: true,
+        latitude: Number(row.last_latitude),
+        longitude: Number(row.last_longitude),
+        sharedAt: Number(row.last_location_at || 0)
+      });
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        error: "位置情報を取得できません。"
+      });
+    }
+  }
+);
+
+/* ==================================================
    Account management
 ================================================== */
 
