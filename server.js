@@ -583,6 +583,12 @@ app.get(
         });
       }
 
+      if (!(await areFriends(requesterId, user.id))) {
+        return res.status(403).json({
+          error: "友達ではないユーザーの位置情報は取得できません。"
+        });
+      }
+
       const result = await pool.query(
         `
         SELECT
