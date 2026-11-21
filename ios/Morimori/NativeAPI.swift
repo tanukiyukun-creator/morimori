@@ -9,13 +9,18 @@ struct LocationPayload: Encodable {
 final class NativeAPI {
     static let shared = NativeAPI()
 
-    // Renderへ公開したmorimoriサーバーのURLに変更してください。
-    var baseURL = "https://camview-1sff.onrender.com"
+    private let baseURL: String = {
+        let value = (Bundle.main.object(forInfoDictionaryKey: "MORIMORI_BASE_URL") as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return value
+    }()
 
     private init() {}
 
     func sendLocation(userId: String, latitude: Double, longitude: Double) async throws {
-        guard let url = URL(string: "\(baseURL)/api/location/update") else {
+        guard !baseURL.isEmpty,
+              let url = URL(string: "\(baseURL)/api/location/update") else {
             throw URLError(.badURL)
         }
 
