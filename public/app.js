@@ -1594,12 +1594,16 @@ function showChatShareMenu() {
         );
 
         if (latest?.available) {
-          showLocationMessage({
-            fromUser: currentChatUser,
-            latitude: latest.latitude,
-            longitude: latest.longitude,
-            sharedAt: latest.sharedAt
+          currentMessages.push({
+            id: "location-" + currentChatUser.id + "-" + latest.sharedAt,
+            from: currentChatUser.id,
+            to: me.id,
+            kind: "location",
+            latitude: Number(latest.latitude),
+            longitude: Number(latest.longitude),
+            createdAt: Number(latest.sharedAt || Date.now())
           });
+          renderMessages();
           showToast("最新のGPS位置を表示しました");
           return;
         }
