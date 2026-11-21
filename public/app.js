@@ -1585,10 +1585,33 @@ function showChatShareMenu() {
     menu.innerHTML = '<button id="request-location-action">📍 GPSを確認</button><button id="request-camera-action">📷 カメラを確認</button>';
     document.body.appendChild(menu);
 
-    document.getElementById("request-location-action")?.addEventListener("click", () => {
+    document.getElementById("request-location-action")?.addEventListener("click", async () => {
       menu.remove();
-      socket.emit("request-location", { to: currentChatUser.id, from: me.id });
-      showToast("GPS共有を開始しました");
+
+      try {
+        const latest = await api(
+          `/api/location/latest/${encodeURIComponent(currentChatUser.id)}?requesterId=${encodeURIComponent(me.id)}`
+        );
+
+        if (latest?.available) {
+          showLocationMessage({
+            fromUser: currentChatUser,
+            latitude: latest.latitude,
+            longitude: latest.longitude,
+            sharedAt: latest.sharedAt
+          });
+          showToast("最新のGPS位置を表示しました");
+          return;
+        }
+
+        socket.emit("request-location", {
+          to: currentChatUser.id,
+          from: me.id
+        });
+        showToast("GPS共有をリクエストしました");
+      } catch (error) {
+        showToast(error.message || "GPSを取得できませんでした");
+      }
     });
     document.getElementById("request-camera-action")?.addEventListener("click", () => {
       menu.remove();
