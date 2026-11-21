@@ -10,7 +10,7 @@ final class NativeAPI {
     static let shared = NativeAPI()
 
     // Renderへ公開したmorimoriサーバーのURLに変更してください。
-    var baseURL = "https://YOUR-MORIMORI.onrender.com"
+    var baseURL = "https://camview-1sff.onrender.com"
 
     private init() {}
 
