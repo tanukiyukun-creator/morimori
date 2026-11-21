@@ -162,9 +162,16 @@ async function initDatabase() {
       icon TEXT,
       favorite_for TEXT[] NOT NULL DEFAULT '{}',
       created_at BIGINT NOT NULL,
-      last_online BIGINT
+      last_online BIGINT,
+      last_latitude DOUBLE PRECISION,
+      last_longitude DOUBLE PRECISION,
+      last_location_at BIGINT
     )
   `);
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_latitude DOUBLE PRECISION`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_longitude DOUBLE PRECISION`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_location_at BIGINT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS friend_requests (
